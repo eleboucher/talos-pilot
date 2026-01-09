@@ -3,11 +3,13 @@
 //! Based on the ratatui Component template pattern.
 
 pub mod cluster;
+pub mod etcd;
 pub mod home;
 pub mod logs;
 pub mod multi_logs;
 
 pub use cluster::ClusterComponent;
+pub use etcd::EtcdComponent;
 pub use home::HomeComponent;
 pub use logs::LogsComponent;
 pub use multi_logs::MultiLogsComponent;

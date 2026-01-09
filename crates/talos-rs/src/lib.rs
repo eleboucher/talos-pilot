@@ -62,8 +62,11 @@ pub mod proto {
 }
 
 pub use client::{
+    // Node info types
     MemInfo, NodeCpuInfo, NodeLoadAvg, NodeMemory, NodeServices, ServiceHealth, ServiceInfo,
     TalosClient, VersionInfo,
+    // Etcd types
+    EtcdAlarm, EtcdAlarmType, EtcdMemberInfo, EtcdMemberStatus,
 };
 pub use config::{Context, TalosConfig};
 pub use error::TalosError;

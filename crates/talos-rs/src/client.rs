@@ -6,7 +6,7 @@ use crate::auth::create_channel;
 use crate::config::{Context, TalosConfig};
 use crate::error::TalosError;
 use crate::proto::machine::machine_service_client::MachineServiceClient;
-use crate::proto::machine::LogsRequest;
+use crate::proto::machine::{EtcdMemberListRequest, LogsRequest};
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic::Request;
@@ -326,6 +326,92 @@ impl TalosClient {
 
         Ok(logs)
     }
+
+    // ==================== Etcd APIs ====================
+
+    /// Get etcd member list from control plane nodes
+    pub async fn etcd_members(&self) -> Result<Vec<EtcdMemberInfo>, TalosError> {
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(EtcdMemberListRequest {
+            query_local: false,
+        }));
+
+        let response = client.etcd_member_list(request).await?;
+        let inner = response.into_inner();
+
+        let mut members = Vec::new();
+        for msg in inner.messages {
+            for member in msg.members {
+                members.push(EtcdMemberInfo {
+                    id: member.id,
+                    hostname: member.hostname,
+                    peer_urls: member.peer_urls,
+                    client_urls: member.client_urls,
+                    is_learner: member.is_learner,
+                });
+            }
+        }
+
+        Ok(members)
+    }
+
+    /// Get etcd status from control plane nodes
+    /// Returns status for each etcd member that responds
+    pub async fn etcd_status(&self) -> Result<Vec<EtcdMemberStatus>, TalosError> {
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(()));
+
+        let response = client.etcd_status(request).await?;
+        let inner = response.into_inner();
+
+        let statuses: Vec<EtcdMemberStatus> = inner
+            .messages
+            .into_iter()
+            .filter_map(|msg| {
+                msg.member_status.map(|status| EtcdMemberStatus {
+                    node: msg.metadata.as_ref().map(|m| m.hostname.clone()).unwrap_or_default(),
+                    member_id: status.member_id,
+                    protocol_version: status.protocol_version,
+                    db_size: status.db_size,
+                    db_size_in_use: status.db_size_in_use,
+                    leader_id: status.leader,
+                    raft_index: status.raft_index,
+                    raft_term: status.raft_term,
+                    raft_applied_index: status.raft_applied_index,
+                    errors: status.errors,
+                    is_learner: status.is_learner,
+                })
+            })
+            .collect();
+
+        Ok(statuses)
+    }
+
+    /// Get etcd alarms from control plane nodes
+    pub async fn etcd_alarms(&self) -> Result<Vec<EtcdAlarm>, TalosError> {
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(()));
+
+        let response = client.etcd_alarm_list(request).await?;
+        let inner = response.into_inner();
+
+        let mut alarms = Vec::new();
+        for msg in inner.messages {
+            let node = msg.metadata.as_ref().map(|m| m.hostname.clone()).unwrap_or_default();
+            for member_alarm in msg.member_alarms {
+                // Only include non-NONE alarms
+                if member_alarm.alarm != 0 {
+                    alarms.push(EtcdAlarm {
+                        node: node.clone(),
+                        member_id: member_alarm.member_id,
+                        alarm_type: EtcdAlarmType::from_i32(member_alarm.alarm),
+                    });
+                }
+            }
+        }
+
+        Ok(alarms)
+    }
 }
 
 /// Version information for a node
@@ -407,4 +493,129 @@ pub struct NodeCpuInfo {
     pub cpu_count: usize,
     pub model_name: String,
     pub mhz: f64,
+}
+
+// ==================== Etcd Types ====================
+
+/// Etcd member information (from member list)
+#[derive(Debug, Clone)]
+pub struct EtcdMemberInfo {
+    pub id: u64,
+    pub hostname: String,
+    pub peer_urls: Vec<String>,
+    pub client_urls: Vec<String>,
+    pub is_learner: bool,
+}
+
+/// Etcd member status (from status call)
+#[derive(Debug, Clone)]
+pub struct EtcdMemberStatus {
+    /// Node hostname that reported this status
+    pub node: String,
+    /// Member ID
+    pub member_id: u64,
+    /// Protocol version (e.g., "3.5")
+    pub protocol_version: String,
+    /// Total database size in bytes
+    pub db_size: i64,
+    /// Database size in use in bytes
+    pub db_size_in_use: i64,
+    /// Current leader's member ID
+    pub leader_id: u64,
+    /// Raft index
+    pub raft_index: u64,
+    /// Raft term
+    pub raft_term: u64,
+    /// Raft applied index
+    pub raft_applied_index: u64,
+    /// Any errors reported
+    pub errors: Vec<String>,
+    /// Whether this member is a learner
+    pub is_learner: bool,
+}
+
+impl EtcdMemberStatus {
+    /// Check if this member is the leader
+    pub fn is_leader(&self) -> bool {
+        self.member_id == self.leader_id && self.leader_id != 0
+    }
+
+    /// Get DB size in human-readable format
+    pub fn db_size_human(&self) -> String {
+        format_bytes(self.db_size as u64)
+    }
+
+    /// Get DB size in use in human-readable format
+    pub fn db_size_in_use_human(&self) -> String {
+        format_bytes(self.db_size_in_use as u64)
+    }
+
+    /// Get DB usage percentage
+    pub fn db_usage_percent(&self) -> f32 {
+        if self.db_size == 0 {
+            return 0.0;
+        }
+        (self.db_size_in_use as f32 / self.db_size as f32) * 100.0
+    }
+}
+
+/// Etcd alarm
+#[derive(Debug, Clone)]
+pub struct EtcdAlarm {
+    /// Node that reported this alarm
+    pub node: String,
+    /// Member ID with the alarm
+    pub member_id: u64,
+    /// Type of alarm
+    pub alarm_type: EtcdAlarmType,
+}
+
+/// Type of etcd alarm
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EtcdAlarmType {
+    /// No alarm (should not appear in results)
+    None,
+    /// Database has run out of space
+    NoSpace,
+    /// Database corruption detected
+    Corrupt,
+    /// Unknown alarm type
+    Unknown(i32),
+}
+
+impl EtcdAlarmType {
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            0 => EtcdAlarmType::None,
+            1 => EtcdAlarmType::NoSpace,
+            2 => EtcdAlarmType::Corrupt,
+            v => EtcdAlarmType::Unknown(v),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EtcdAlarmType::None => "NONE",
+            EtcdAlarmType::NoSpace => "NOSPACE",
+            EtcdAlarmType::Corrupt => "CORRUPT",
+            EtcdAlarmType::Unknown(_) => "UNKNOWN",
+        }
+    }
+}
+
+/// Format bytes into human-readable string (KB, MB, GB)
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }

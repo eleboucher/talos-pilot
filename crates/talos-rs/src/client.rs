@@ -263,17 +263,36 @@ impl TalosClient {
 
         // Spawn a task to read from the stream and send to channel
         tokio::spawn(async move {
+            // Buffer for incomplete lines that span chunk boundaries
+            let mut pending = String::new();
+
             while let Some(chunk) = stream.next().await {
                 match chunk {
                     Ok(data) => {
                         if let Ok(text) = String::from_utf8(data.bytes) {
-                            // Split into lines and send each
-                            for line in text.lines() {
-                                if !line.trim().is_empty()
-                                    && tx.send(line.to_string()).is_err()
-                                {
+                            // Prepend any pending partial line from previous chunk
+                            let combined = if pending.is_empty() {
+                                text
+                            } else {
+                                std::mem::take(&mut pending) + &text
+                            };
+
+                            // Check if chunk ends with newline (complete line) or not (partial)
+                            let ends_with_newline = combined.ends_with('\n');
+
+                            // Split into lines
+                            let mut lines: Vec<&str> = combined.lines().collect();
+
+                            // If doesn't end with newline, last "line" is incomplete - save it
+                            if !ends_with_newline && !lines.is_empty() {
+                                pending = lines.pop().unwrap_or("").to_string();
+                            }
+
+                            // Send complete lines
+                            for line in lines {
+                                if !line.trim().is_empty() && tx.send(line.to_string()).is_err() {
                                     // Receiver dropped, stop streaming
-                                    break;
+                                    return;
                                 }
                             }
                         }
@@ -283,6 +302,11 @@ impl TalosClient {
                         break;
                     }
                 }
+            }
+
+            // Send any remaining pending content when stream ends
+            if !pending.trim().is_empty() {
+                let _ = tx.send(pending);
             }
         });
 

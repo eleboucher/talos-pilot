@@ -206,8 +206,34 @@ impl LogsComponent {
         // Find the time portion - look for HH:MM:SS pattern
         // Could be after a date like "2026/01/09 " or "2026-01-09T"
 
-        // Find first occurrence of NN:NN pattern
         let bytes = ts.as_bytes();
+        // Look for HH:MM:SS pattern first
+        for i in 0..bytes.len().saturating_sub(7) {
+            if bytes[i].is_ascii_digit()
+                && bytes[i + 1].is_ascii_digit()
+                && bytes[i + 2] == b':'
+                && bytes[i + 3].is_ascii_digit()
+                && bytes[i + 4].is_ascii_digit()
+                && bytes[i + 5] == b':'
+                && bytes[i + 6].is_ascii_digit()
+                && bytes[i + 7].is_ascii_digit()
+            {
+                // Validate it's a real time (HH < 24, MM < 60, SS < 60)
+                let hh = (bytes[i] - b'0') * 10 + (bytes[i + 1] - b'0');
+                let mm = (bytes[i + 3] - b'0') * 10 + (bytes[i + 4] - b'0');
+                let ss = (bytes[i + 6] - b'0') * 10 + (bytes[i + 7] - b'0');
+                if hh < 24 && mm < 60 && ss < 60 {
+                    let result = ts[i..i + 8].to_string();
+                    // Reject 00:00:00 - likely Go's zero time from event dumps
+                    if result == "00:00:00" {
+                        continue;
+                    }
+                    return result;
+                }
+            }
+        }
+
+        // Fallback: look for HH:MM pattern
         for i in 0..bytes.len().saturating_sub(4) {
             if bytes[i].is_ascii_digit()
                 && bytes[i + 1].is_ascii_digit()
@@ -215,19 +241,22 @@ impl LogsComponent {
                 && bytes[i + 3].is_ascii_digit()
                 && bytes[i + 4].is_ascii_digit()
             {
-                // Found start of time, extract HH:MM:SS
-                let time_start = i;
-                let time_end = (time_start + 8).min(ts.len());
-                return ts[time_start..time_end].to_string();
+                // Validate it's a real time (HH < 24, MM < 60)
+                let hh = (bytes[i] - b'0') * 10 + (bytes[i + 1] - b'0');
+                let mm = (bytes[i + 3] - b'0') * 10 + (bytes[i + 4] - b'0');
+                if hh < 24 && mm < 60 {
+                    let result = ts[i..i + 5].to_string();
+                    // Reject 00:00 - likely Go's zero time
+                    if result == "00:00" {
+                        continue;
+                    }
+                    return result;
+                }
             }
         }
 
-        // No time pattern found, return as-is (truncated)
-        if ts.len() > 8 {
-            ts[..8].to_string()
-        } else {
-            ts.to_string()
-        }
+        // No valid time pattern found
+        String::new()
     }
 
     /// Clean up message text
@@ -587,7 +616,10 @@ impl Component for LogsComponent {
                     ));
                     spans.push(Span::raw(" "));
                 } else {
-                    spans.push(Span::raw("         ")); // 9 chars placeholder
+                    spans.push(Span::styled(
+                        " NO TIME ",
+                        Style::default().fg(Color::DarkGray).dim(),
+                    ));
                 }
 
                 // Level badge (colored background)

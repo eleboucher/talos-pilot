@@ -260,7 +260,7 @@ impl MultiLogsComponent {
             levels_state,
             entries: Vec::new(),
             visible_indices: Vec::new(),
-            floating_pane: FloatingPane::Services, // Start with services pane open
+            floating_pane: FloatingPane::None, // Start with pane closed
             scroll: 0,
             viewport_height: 20, // Will be updated on first draw
             following: true,
@@ -623,25 +623,29 @@ impl MultiLogsComponent {
             let ts = line[..end].trim();
             let rest = line[end..].trim();
             let short_ts = Self::extract_time_part(ts);
+            // Reject 00:00:00 - it's likely Go's zero time from event dumps
+            if short_ts == "00:00:00" {
+                return (String::new(), 0, line);
+            }
             let sort_key = Self::time_to_sort_key(&short_ts);
             (short_ts, sort_key, rest)
         } else {
-            // Fallback: try to find HH:MM:SS anywhere in the line
-            let short_ts = Self::extract_time_part(line);
-            if !short_ts.is_empty() {
-                let sort_key = Self::time_to_sort_key(&short_ts);
-                (short_ts, sort_key, line)
-            } else {
-                (String::new(), 0, line)
-            }
+            // No timestamp found - don't search the whole line as that matches
+            // embedded times in log content (Go zero times, SHA hashes, etc.)
+            (String::new(), 0, line)
         }
     }
 
     /// Extract HH:MM:SS from any timestamp format
+    /// Only searches within the first portion of the string to avoid matching
+    /// time-like patterns in content (e.g., sha256:70... would match as 56:70)
     fn extract_time_part(ts: &str) -> String {
         let bytes = ts.as_bytes();
+        // Only search the first 30 chars to avoid matching patterns in log content
+        let search_len = bytes.len().min(30);
+
         // Look for HH:MM:SS pattern (must have two colons)
-        for i in 0..bytes.len().saturating_sub(7) {
+        for i in 0..search_len.saturating_sub(7) {
             if bytes[i].is_ascii_digit()
                 && bytes[i + 1].is_ascii_digit()
                 && bytes[i + 2] == b':'
@@ -651,19 +655,40 @@ impl MultiLogsComponent {
                 && bytes[i + 6].is_ascii_digit()
                 && bytes[i + 7].is_ascii_digit()
             {
-                return ts[i..i + 8].to_string();
+                // Validate it's a real time (HH < 24, MM < 60, SS < 60)
+                let hh = (bytes[i] - b'0') * 10 + (bytes[i + 1] - b'0');
+                let mm = (bytes[i + 3] - b'0') * 10 + (bytes[i + 4] - b'0');
+                let ss = (bytes[i + 6] - b'0') * 10 + (bytes[i + 7] - b'0');
+                if hh < 24 && mm < 60 && ss < 60 {
+                    let result = ts[i..i + 8].to_string();
+                    // Reject 00:00:00 - likely Go's zero time from event dumps
+                    if result == "00:00:00" {
+                        continue;
+                    }
+                    return result;
+                }
             }
         }
-        // Fallback: look for HH:MM pattern (only take 5 chars to avoid capturing decimals)
-        for i in 0..bytes.len().saturating_sub(4) {
+        // Fallback: look for HH:MM pattern at the start only (first 20 chars)
+        let fallback_len = bytes.len().min(20);
+        for i in 0..fallback_len.saturating_sub(4) {
             if bytes[i].is_ascii_digit()
                 && bytes[i + 1].is_ascii_digit()
                 && bytes[i + 2] == b':'
                 && bytes[i + 3].is_ascii_digit()
                 && bytes[i + 4].is_ascii_digit()
             {
-                // Only return HH:MM (5 chars), not HH:MM.XX which would include decimals
-                return ts[i..i + 5].to_string();
+                // Validate it's a real time (HH < 24, MM < 60)
+                let hh = (bytes[i] - b'0') * 10 + (bytes[i + 1] - b'0');
+                let mm = (bytes[i + 3] - b'0') * 10 + (bytes[i + 4] - b'0');
+                if hh < 24 && mm < 60 {
+                    let result = ts[i..i + 5].to_string();
+                    // Reject 00:00 - likely Go's zero time
+                    if result == "00:00" {
+                        continue;
+                    }
+                    return result;
+                }
             }
         }
         String::new()
@@ -900,9 +925,14 @@ impl MultiLogsComponent {
 
     /// Format a log entry as a string
     fn format_entry(entry: &MultiLogEntry) -> String {
+        let ts = if entry.timestamp.is_empty() {
+            "NO TIME"
+        } else {
+            &entry.timestamp
+        };
         format!(
             "{} {} {} {}",
-            entry.timestamp,
+            ts,
             entry.service_id,
             entry.level.badge(),
             entry.message
@@ -1278,7 +1308,10 @@ impl MultiLogsComponent {
                     Style::default().fg(timestamp_color),
                 ));
             } else {
-                spans.push(Span::raw("        "));
+                spans.push(Span::styled(
+                    " NO TIME",
+                    Style::default().fg(Color::DarkGray).dim(),
+                ));
             }
             spans.push(Span::raw(" "));
 

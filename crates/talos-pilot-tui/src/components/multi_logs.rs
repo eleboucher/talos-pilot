@@ -31,7 +31,7 @@ const SERVICE_COLORS: &[Color] = &[
 ];
 
 /// Log level (reused from logs.rs pattern)
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum LogLevel {
     Error,
     Warn,
@@ -75,6 +75,16 @@ impl LogLevel {
             LogLevel::Unknown => "---",
         }
     }
+
+    fn name(&self) -> &'static str {
+        match self {
+            LogLevel::Error => "Error",
+            LogLevel::Warn => "Warn",
+            LogLevel::Info => "Info",
+            LogLevel::Debug => "Debug",
+            LogLevel::Unknown => "Other",
+        }
+    }
 }
 
 /// A log entry from any service
@@ -109,15 +119,6 @@ struct ServiceState {
     entry_count: usize,
 }
 
-/// View mode
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ViewMode {
-    /// Full mode with sidebar
-    Full,
-    /// Compact mode without sidebar
-    Compact,
-}
-
 /// Search mode
 #[derive(Debug, Clone, PartialEq)]
 enum SearchMode {
@@ -126,11 +127,20 @@ enum SearchMode {
     Active,
 }
 
-/// Sidebar focus state
+/// Which floating pane is open
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Focus {
-    Sidebar,
-    Logs,
+enum FloatingPane {
+    None,
+    Services,
+    Levels,
+}
+
+/// Level filter state
+#[derive(Debug, Clone)]
+struct LevelState {
+    level: LogLevel,
+    active: bool,
+    entry_count: usize,
 }
 
 /// Multi-service logs component
@@ -147,15 +157,20 @@ pub struct MultiLogsComponent {
     /// Sidebar list state
     sidebar_state: ListState,
 
+    /// Level filters
+    levels: Vec<LevelState>,
+    /// Selected level in levels pane
+    selected_level: usize,
+    /// Levels list state
+    levels_state: ListState,
+
     /// All log entries (sorted by timestamp)
     entries: Vec<MultiLogEntry>,
-    /// Filtered entries (indices into entries vec, only active services)
+    /// Filtered entries (indices into entries vec, only active services/levels)
     visible_indices: Vec<usize>,
 
-    /// View mode
-    view_mode: ViewMode,
-    /// Current focus (sidebar or logs)
-    focus: Focus,
+    /// Which floating pane is open
+    floating_pane: FloatingPane,
     /// Scroll position in logs
     scroll: u16,
     /// Last known viewport height (for half-page scroll)
@@ -198,16 +213,29 @@ impl MultiLogsComponent {
         let mut sidebar_state = ListState::default();
         sidebar_state.select(Some(0));
 
+        // Initialize level filters (all active by default)
+        let levels = vec![
+            LevelState { level: LogLevel::Error, active: true, entry_count: 0 },
+            LevelState { level: LogLevel::Warn, active: true, entry_count: 0 },
+            LevelState { level: LogLevel::Info, active: true, entry_count: 0 },
+            LevelState { level: LogLevel::Debug, active: true, entry_count: 0 },
+            LevelState { level: LogLevel::Unknown, active: true, entry_count: 0 },
+        ];
+        let mut levels_state = ListState::default();
+        levels_state.select(Some(0));
+
         Self {
             node_ip,
             node_role,
             services,
             selected_service: 0,
             sidebar_state,
+            levels,
+            selected_level: 0,
+            levels_state,
             entries: Vec::new(),
             visible_indices: Vec::new(),
-            view_mode: ViewMode::Full,
-            focus: Focus::Sidebar, // Start with sidebar focused
+            floating_pane: FloatingPane::Services, // Start with services pane open
             scroll: 0,
             viewport_height: 20, // Will be updated on first draw
             following: true,
@@ -261,6 +289,11 @@ impl MultiLogsComponent {
             service.entry_count = self.entries.iter().filter(|e| e.service_id == service.id).count();
         }
 
+        // Update level entry counts
+        for level_state in &mut self.levels {
+            level_state.entry_count = self.entries.iter().filter(|e| e.level == level_state.level).count();
+        }
+
         // Build visible indices
         self.rebuild_visible_indices();
 
@@ -292,8 +325,83 @@ impl MultiLogsComponent {
         }
     }
 
-    /// Extract timestamp from line start
+    /// Extract timestamp from line - handles multiple formats
     fn extract_timestamp(line: &str) -> (String, i64, &str) {
+        // Try klog format first: I0109 16:42:01.123456 or W0109 16:42:01.123456
+        // Format: [IWEF]MMDD HH:MM:SS.microseconds
+        if line.len() > 20 {
+            let first_char = line.chars().next().unwrap_or(' ');
+            if matches!(first_char, 'I' | 'W' | 'E' | 'F')
+                && let Some(space_pos) = line[1..].find(' ')
+            {
+                let date_part = &line[1..space_pos + 1]; // MMDD
+                if date_part.len() == 4 && date_part.chars().all(|c| c.is_ascii_digit()) {
+                    // Find the time part after the space
+                    let after_date = &line[space_pos + 2..];
+                    if let Some(time_end) = after_date.find(|c: char| !c.is_ascii_digit() && c != ':' && c != '.') {
+                        let time_part = &after_date[..time_end];
+                        if time_part.contains(':') {
+                            let rest_start = space_pos + 2 + time_end;
+                            let rest = line[rest_start..].trim();
+                            let short_ts = Self::extract_time_part(time_part);
+                            let sort_key = Self::time_to_sort_key(&short_ts);
+                            return (short_ts, sort_key, rest);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Try JSON format with numeric timestamp: {"ts":1767972610784.5803,...}
+        if line.starts_with('{') {
+            // Try numeric "ts" field first (Unix timestamp in ms)
+            if let Some(ts_start) = line.find("\"ts\":") {
+                let ts_value_start = ts_start + 5;
+                let rest = &line[ts_value_start..];
+                // Find end of number (comma, space, or closing brace)
+                if let Some(ts_end) = rest.find([',', '}', ' ']) {
+                    let ts_str = rest[..ts_end].trim();
+                    // Try to parse as float (ms timestamp)
+                    if let Ok(ts_ms) = ts_str.parse::<f64>() {
+                        let (short_ts, sort_key) = Self::unix_ms_to_time(ts_ms);
+                        return (short_ts, sort_key, line);
+                    }
+                    // Try as quoted string
+                    if let Some(stripped) = ts_str.strip_prefix('"')
+                        && let Some(end_quote) = stripped.find('"')
+                    {
+                        let ts = &stripped[..end_quote];
+                        let short_ts = Self::extract_time_part(ts);
+                        let sort_key = Self::time_to_sort_key(&short_ts);
+                        return (short_ts, sort_key, line);
+                    }
+                }
+            }
+            // Try "time" field as string
+            if let Some(ts_start) = line.find("\"time\":\"") {
+                let ts_value_start = ts_start + 8;
+                if let Some(ts_end) = line[ts_value_start..].find('"') {
+                    let ts = &line[ts_value_start..ts_value_start + ts_end];
+                    let short_ts = Self::extract_time_part(ts);
+                    let sort_key = Self::time_to_sort_key(&short_ts);
+                    return (short_ts, sort_key, line);
+                }
+            }
+        }
+
+        // Try containerd format: time="2024-01-09T16:42:01.123456789Z" level=info msg="..."
+        if let Some(ts_start) = line.find("time=\"") {
+            let ts_value_start = ts_start + 6;
+            if let Some(ts_end) = line[ts_value_start..].find('"') {
+                let ts = &line[ts_value_start..ts_value_start + ts_end];
+                let short_ts = Self::extract_time_part(ts);
+                let sort_key = Self::time_to_sort_key(&short_ts);
+                return (short_ts, sort_key, line);
+            }
+        }
+
+        // Try ISO 8601 or standard date format at start
+        // 2024-01-09T16:42:01 or 2024/01/09 16:42:01
         let chars: Vec<char> = line.chars().collect();
         let mut end = 0;
         let mut has_colon = false;
@@ -303,9 +411,10 @@ impl MultiLogsComponent {
                 has_colon = true;
             }
 
-            if c.is_ascii_digit() || *c == '/' || *c == '-' || *c == ':' || *c == '.' || *c == 'T' {
+            if c.is_ascii_digit() || *c == '/' || *c == '-' || *c == ':' || *c == '.' || *c == 'T' || *c == 'Z' {
                 end = i + 1;
             } else if *c == ' ' {
+                // Allow space between date and time (2024-01-09 16:42:01)
                 if let Some(next) = chars.get(i + 1)
                     && next.is_ascii_digit()
                 {
@@ -321,26 +430,39 @@ impl MultiLogsComponent {
         if end >= 8 && has_colon && end < line.len() {
             let ts = line[..end].trim();
             let rest = line[end..].trim();
-            let short_ts = Self::shorten_timestamp(ts);
-            // Use character position as sort key (good enough for same-second ordering)
-            let sort_key = Self::parse_sort_key(ts);
+            let short_ts = Self::extract_time_part(ts);
+            let sort_key = Self::time_to_sort_key(&short_ts);
             (short_ts, sort_key, rest)
         } else {
-            (String::new(), 0, line)
+            // Fallback: try to find HH:MM:SS anywhere in the line
+            let short_ts = Self::extract_time_part(line);
+            if !short_ts.is_empty() {
+                let sort_key = Self::time_to_sort_key(&short_ts);
+                (short_ts, sort_key, line)
+            } else {
+                (String::new(), 0, line)
+            }
         }
     }
 
-    /// Parse timestamp to sortable integer
-    fn parse_sort_key(ts: &str) -> i64 {
-        // Simple approach: extract digits and create comparable number
-        // Format: YYYYMMDDHHMMSS or just HHMMSS
-        let digits: String = ts.chars().filter(|c| c.is_ascii_digit()).collect();
-        digits.parse().unwrap_or(0)
-    }
-
-    /// Shorten timestamp to HH:MM:SS
-    fn shorten_timestamp(ts: &str) -> String {
+    /// Extract HH:MM:SS from any timestamp format
+    fn extract_time_part(ts: &str) -> String {
         let bytes = ts.as_bytes();
+        // Look for HH:MM:SS pattern
+        for i in 0..bytes.len().saturating_sub(7) {
+            if bytes[i].is_ascii_digit()
+                && bytes[i + 1].is_ascii_digit()
+                && bytes[i + 2] == b':'
+                && bytes[i + 3].is_ascii_digit()
+                && bytes[i + 4].is_ascii_digit()
+                && bytes[i + 5] == b':'
+                && bytes[i + 6].is_ascii_digit()
+                && bytes[i + 7].is_ascii_digit()
+            {
+                return ts[i..i + 8].to_string();
+            }
+        }
+        // Fallback: look for HH:MM pattern
         for i in 0..bytes.len().saturating_sub(4) {
             if bytes[i].is_ascii_digit()
                 && bytes[i + 1].is_ascii_digit()
@@ -348,17 +470,30 @@ impl MultiLogsComponent {
                 && bytes[i + 3].is_ascii_digit()
                 && bytes[i + 4].is_ascii_digit()
             {
-                let time_start = i;
-                let time_end = (time_start + 8).min(ts.len());
-                return ts[time_start..time_end].to_string();
+                let end = (i + 8).min(ts.len());
+                return ts[i..end].to_string();
             }
         }
+        String::new()
+    }
 
-        if ts.len() > 8 {
-            ts[..8].to_string()
-        } else {
-            ts.to_string()
-        }
+    /// Convert HH:MM:SS to sortable integer (HHMMSS)
+    fn time_to_sort_key(time: &str) -> i64 {
+        // Extract just digits from HH:MM:SS format
+        let digits: String = time.chars().filter(|c| c.is_ascii_digit()).take(6).collect();
+        digits.parse().unwrap_or(0)
+    }
+
+    /// Convert Unix timestamp in milliseconds to (HH:MM:SS, sort_key)
+    fn unix_ms_to_time(ts_ms: f64) -> (String, i64) {
+        let ts_secs = (ts_ms / 1000.0) as i64;
+        let secs_in_day = ts_secs % 86400;
+        let hours = secs_in_day / 3600;
+        let minutes = (secs_in_day % 3600) / 60;
+        let seconds = secs_in_day % 60;
+        let short_ts = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+        let sort_key = hours * 10000 + minutes * 100 + seconds;
+        (short_ts, sort_key)
     }
 
     /// Clean message text
@@ -400,10 +535,18 @@ impl MultiLogsComponent {
             .map(|s| s.id.as_str())
             .collect();
 
+        let active_levels: HashSet<LogLevel> = self.levels
+            .iter()
+            .filter(|l| l.active)
+            .map(|l| l.level)
+            .collect();
+
         self.visible_indices = self.entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| active_services.contains(e.service_id.as_str()))
+            .filter(|(_, e)| {
+                active_services.contains(e.service_id.as_str()) && active_levels.contains(&e.level)
+            })
             .map(|(i, _)| i)
             .collect();
 
@@ -446,6 +589,35 @@ impl MultiLogsComponent {
     /// Count active services
     fn active_count(&self) -> usize {
         self.services.iter().filter(|s| s.active).count()
+    }
+
+    /// Toggle level active state
+    fn toggle_level(&mut self, index: usize) {
+        if let Some(level) = self.levels.get_mut(index) {
+            level.active = !level.active;
+            self.rebuild_visible_indices();
+        }
+    }
+
+    /// Set all levels active
+    fn activate_all_levels(&mut self) {
+        for level in &mut self.levels {
+            level.active = true;
+        }
+        self.rebuild_visible_indices();
+    }
+
+    /// Set all levels inactive
+    fn deactivate_all_levels(&mut self) {
+        for level in &mut self.levels {
+            level.active = false;
+        }
+        self.rebuild_visible_indices();
+    }
+
+    /// Count active levels
+    fn active_level_count(&self) -> usize {
+        self.levels.iter().filter(|l| l.active).count()
     }
 
     /// Scroll up
@@ -631,11 +803,7 @@ impl MultiLogsComponent {
             })
             .collect();
 
-        let border_style = if self.focus == Focus::Sidebar {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
+        let border_style = Style::default().fg(Color::Cyan);
 
         let list = List::new(items)
             .block(
@@ -663,6 +831,52 @@ impl MultiLogsComponent {
         frame.render_stateful_widget(list, panel_area, &mut adjusted_state);
     }
 
+    /// Draw the levels filter panel
+    fn draw_levels_panel(&mut self, frame: &mut Frame, area: Rect) {
+        let panel_width = 18u16;
+        let panel_height = (self.levels.len() + 2).min(area.height as usize - 2) as u16;
+
+        // Position in top-left with small margin
+        let panel_area = Rect::new(
+            area.x + 1,
+            area.y,
+            panel_width,
+            panel_height,
+        );
+
+        // Clear the background
+        frame.render_widget(ratatui::widgets::Clear, panel_area);
+
+        let items: Vec<ListItem> = self.levels
+            .iter()
+            .map(|l| {
+                let indicator = if l.active { "●" } else { "○" };
+                let style = Style::default().fg(l.level.color());
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(indicator, style),
+                    Span::raw(" "),
+                    Span::styled(l.level.name(), style),
+                    Span::raw(format!(" ({})", l.entry_count)).dim(),
+                ]))
+            })
+            .collect();
+
+        let border_style = Style::default().fg(Color::Cyan);
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .title("─ Levels ")
+                    .title_style(border_style)
+                    .borders(Borders::ALL)
+                    .border_style(border_style),
+            )
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+
+        frame.render_stateful_widget(list, panel_area, &mut self.levels_state);
+    }
+
     /// Draw the logs area
     fn draw_logs(&self, frame: &mut Frame, area: Rect) {
         if self.loading {
@@ -681,8 +895,8 @@ impl MultiLogsComponent {
         }
 
         if self.visible_indices.is_empty() {
-            let msg = if self.active_count() == 0 {
-                " No services selected. Press 'a' to activate all."
+            let msg = if self.active_count() == 0 || self.active_level_count() == 0 {
+                " No services/levels selected. Press 's' or 'l' to open filters."
             } else {
                 " No log entries"
             };
@@ -813,55 +1027,78 @@ impl Component for MultiLogsComponent {
 
         match key.code {
             // Quit/back
-            KeyCode::Char('q') | KeyCode::Esc => {
+            KeyCode::Char('q') => {
+                Ok(Some(Action::Back))
+            }
+            KeyCode::Esc => {
                 if self.search_mode == SearchMode::Active {
                     self.clear_search();
-                    Ok(None)
+                } else if self.floating_pane != FloatingPane::None {
+                    self.floating_pane = FloatingPane::None;
                 } else {
-                    Ok(Some(Action::Back))
+                    return Ok(Some(Action::Back));
                 }
+                Ok(None)
             }
 
-            // Toggle view mode
+            // Toggle between floating panes
             KeyCode::Tab => {
-                self.view_mode = match self.view_mode {
-                    ViewMode::Full => ViewMode::Compact,
-                    ViewMode::Compact => ViewMode::Full,
+                self.floating_pane = match self.floating_pane {
+                    FloatingPane::Services => FloatingPane::Levels,
+                    FloatingPane::Levels => FloatingPane::Services,
+                    FloatingPane::None => FloatingPane::Services,
                 };
-                // Reset focus to logs when switching to compact
-                if self.view_mode == ViewMode::Compact {
-                    self.focus = Focus::Logs;
-                }
                 Ok(None)
             }
 
-            // Switch focus (only in full mode)
-            KeyCode::Left | KeyCode::Right => {
-                if self.view_mode == ViewMode::Full {
-                    self.focus = match self.focus {
-                        Focus::Sidebar => Focus::Logs,
-                        Focus::Logs => Focus::Sidebar,
-                    };
-                }
-                Ok(None)
-            }
-
-            // Navigation
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.focus == Focus::Sidebar && self.view_mode == ViewMode::Full {
-                    self.selected_service = self.selected_service.saturating_sub(1);
-                    self.sidebar_state.select(Some(self.selected_service));
+            // Open specific panes
+            KeyCode::Char('s') => {
+                self.floating_pane = if self.floating_pane == FloatingPane::Services {
+                    FloatingPane::None
                 } else {
-                    self.scroll_up(1);
+                    FloatingPane::Services
+                };
+                Ok(None)
+            }
+            KeyCode::Char('l') if self.search_mode != SearchMode::Active => {
+                self.floating_pane = if self.floating_pane == FloatingPane::Levels {
+                    FloatingPane::None
+                } else {
+                    FloatingPane::Levels
+                };
+                Ok(None)
+            }
+
+            // Navigation - when a pane is open, navigate the pane
+            KeyCode::Up | KeyCode::Char('k') => {
+                match self.floating_pane {
+                    FloatingPane::Services => {
+                        self.selected_service = self.selected_service.saturating_sub(1);
+                        self.sidebar_state.select(Some(self.selected_service));
+                    }
+                    FloatingPane::Levels => {
+                        self.selected_level = self.selected_level.saturating_sub(1);
+                        self.levels_state.select(Some(self.selected_level));
+                    }
+                    FloatingPane::None => {
+                        self.scroll_up(1);
+                    }
                 }
                 Ok(None)
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.focus == Focus::Sidebar && self.view_mode == ViewMode::Full {
-                    self.selected_service = (self.selected_service + 1).min(self.services.len().saturating_sub(1));
-                    self.sidebar_state.select(Some(self.selected_service));
-                } else {
-                    self.scroll_down(1);
+                match self.floating_pane {
+                    FloatingPane::Services => {
+                        self.selected_service = (self.selected_service + 1).min(self.services.len().saturating_sub(1));
+                        self.sidebar_state.select(Some(self.selected_service));
+                    }
+                    FloatingPane::Levels => {
+                        self.selected_level = (self.selected_level + 1).min(self.levels.len().saturating_sub(1));
+                        self.levels_state.select(Some(self.selected_level));
+                    }
+                    FloatingPane::None => {
+                        self.scroll_down(1);
+                    }
                 }
                 Ok(None)
             }
@@ -888,20 +1125,26 @@ impl Component for MultiLogsComponent {
                 self.following = false;
                 Ok(None)
             }
-            KeyCode::End | KeyCode::Char('G') => {
+            KeyCode::Char('G') => {
                 self.scroll_to_bottom();
                 Ok(None)
             }
 
-            // Service toggle
+            // Toggle in current pane
             KeyCode::Char(' ') => {
-                if self.view_mode == ViewMode::Full {
-                    self.toggle_service(self.selected_service);
+                match self.floating_pane {
+                    FloatingPane::Services => self.toggle_service(self.selected_service),
+                    FloatingPane::Levels => self.toggle_level(self.selected_level),
+                    FloatingPane::None => {}
                 }
                 Ok(None)
             }
             KeyCode::Char('a') => {
-                self.activate_all();
+                match self.floating_pane {
+                    FloatingPane::Services => self.activate_all(),
+                    FloatingPane::Levels => self.activate_all_levels(),
+                    FloatingPane::None => {}
+                }
                 Ok(None)
             }
 
@@ -914,11 +1157,15 @@ impl Component for MultiLogsComponent {
                 Ok(None)
             }
             KeyCode::Char('n') => {
-                // n = next match when searching, deactivate all otherwise
                 if self.search_mode == SearchMode::Active {
                     self.next_match();
                 } else {
-                    self.deactivate_all();
+                    // n = none (deactivate all) when a pane is open
+                    match self.floating_pane {
+                        FloatingPane::Services => self.deactivate_all(),
+                        FloatingPane::Levels => self.deactivate_all_levels(),
+                        FloatingPane::None => {}
+                    }
                 }
                 Ok(None)
             }
@@ -981,7 +1228,9 @@ impl Component for MultiLogsComponent {
             Span::raw(format!(" ({})", self.node_role)).dim(),
             Span::raw("  "),
             follow_indicator,
-            Span::raw(format!(" [{} active]", self.active_count())).dim(),
+            Span::raw(format!(" [{}/{} svcs, {}/{} lvls]",
+                self.active_count(), self.services.len(),
+                self.active_level_count(), self.levels.len())).dim(),
         ];
 
         // Show match count when searching
@@ -1012,9 +1261,11 @@ impl Component for MultiLogsComponent {
         // Draw logs (no border)
         self.draw_logs(frame, content_area);
 
-        // Draw floating services panel on top (only in Full mode)
-        if self.view_mode == ViewMode::Full {
-            self.draw_services_panel(frame, content_area);
+        // Draw floating panel on top based on which pane is open
+        match self.floating_pane {
+            FloatingPane::Services => self.draw_services_panel(frame, content_area),
+            FloatingPane::Levels => self.draw_levels_panel(frame, content_area),
+            FloatingPane::None => {}
         }
 
         // Search bar
@@ -1070,7 +1321,7 @@ impl Component for MultiLogsComponent {
                 Span::raw("[Esc]").fg(Color::Yellow),
                 Span::raw(" clear").dim(),
             ]
-        } else if self.view_mode == ViewMode::Full {
+        } else if self.floating_pane != FloatingPane::None {
             vec![
                 Span::raw(" [Space]").fg(Color::Yellow),
                 Span::raw(" toggle").dim(),
@@ -1081,28 +1332,28 @@ impl Component for MultiLogsComponent {
                 Span::raw("[n]").fg(Color::Yellow),
                 Span::raw(" none").dim(),
                 Span::raw("  "),
-                Span::raw("[/]").fg(Color::Yellow),
-                Span::raw(" search").dim(),
+                Span::raw("[Tab]").fg(Color::Yellow),
+                Span::raw(" switch").dim(),
                 Span::raw("  "),
-                Span::raw("[f]").fg(Color::Yellow),
-                Span::raw(" follow").dim(),
+                Span::raw("[Esc]").fg(Color::Yellow),
+                Span::raw(" close").dim(),
                 Span::raw("  "),
                 Span::raw("[q]").fg(Color::Yellow),
                 Span::raw(" back").dim(),
             ]
         } else {
             vec![
-                Span::raw(" [Tab]").fg(Color::Yellow),
-                Span::raw(" show services").dim(),
+                Span::raw(" [s]").fg(Color::Yellow),
+                Span::raw(" services").dim(),
+                Span::raw("  "),
+                Span::raw("[l]").fg(Color::Yellow),
+                Span::raw(" levels").dim(),
                 Span::raw("  "),
                 Span::raw("[/]").fg(Color::Yellow),
                 Span::raw(" search").dim(),
                 Span::raw("  "),
                 Span::raw("[f]").fg(Color::Yellow),
                 Span::raw(" follow").dim(),
-                Span::raw("  "),
-                Span::raw("[↑↓]").fg(Color::Yellow),
-                Span::raw(" scroll").dim(),
                 Span::raw("  "),
                 Span::raw("[q]").fg(Color::Yellow),
                 Span::raw(" back").dim(),

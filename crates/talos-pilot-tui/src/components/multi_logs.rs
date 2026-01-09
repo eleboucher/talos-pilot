@@ -964,40 +964,18 @@ impl MultiLogsComponent {
         let count = lines.len();
         let content = lines.join("\n");
 
-        // Try to copy to clipboard using system tools
-        let result = if cfg!(target_os = "macos") {
-            std::process::Command::new("pbcopy")
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    use std::io::Write;
-                    if let Some(stdin) = child.stdin.as_mut() {
-                        stdin.write_all(content.as_bytes())?;
-                    }
-                    child.wait()
-                })
-        } else {
-            // Try xclip first, then xsel
-            std::process::Command::new("xclip")
-                .args(["-selection", "clipboard"])
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .or_else(|_| {
-                    std::process::Command::new("xsel")
-                        .args(["--clipboard", "--input"])
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                })
-                .and_then(|mut child| {
-                    use std::io::Write;
-                    if let Some(stdin) = child.stdin.as_mut() {
-                        stdin.write_all(content.as_bytes())?;
-                    }
-                    child.wait()
-                })
+        // Copy to clipboard using arboard
+        let success = match arboard::Clipboard::new() {
+            Ok(mut clipboard) => {
+                clipboard.set_text(&content).is_ok()
+            }
+            Err(e) => {
+                tracing::warn!("Failed to access clipboard: {}", e);
+                false
+            }
         };
 
-        (result.map(|s| s.success()).unwrap_or(false), count)
+        (success, count)
     }
 
     /// Update search matches

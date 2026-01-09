@@ -152,12 +152,13 @@ impl TalosClient {
             .into_iter()
             .map(|msg| NodeMemory {
                 node: msg.metadata.as_ref().map(|m| m.hostname.clone()).unwrap_or_default(),
+                // Note: /proc/meminfo values are in KB, convert to bytes
                 meminfo: msg.meminfo.map(|m| MemInfo {
-                    mem_total: m.memtotal,
-                    mem_free: m.memfree,
-                    mem_available: m.memavailable,
-                    buffers: m.buffers,
-                    cached: m.cached,
+                    mem_total: m.memtotal * 1024,
+                    mem_free: m.memfree * 1024,
+                    mem_available: m.memavailable * 1024,
+                    buffers: m.buffers * 1024,
+                    cached: m.cached * 1024,
                 }),
             })
             .collect();
@@ -213,6 +214,41 @@ impl TalosClient {
             .collect();
 
         Ok(cpus)
+    }
+
+    /// Get system statistics (CPU usage, process counts) from all configured nodes
+    pub async fn system_stat(&self) -> Result<Vec<NodeSystemStat>, TalosError> {
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(()));
+
+        let response = client.system_stat(request).await?;
+        let inner = response.into_inner();
+
+        let stats: Vec<NodeSystemStat> = inner
+            .messages
+            .into_iter()
+            .map(|msg| {
+                let cpu_total = msg.cpu_total.map(|c| CpuStat {
+                    user: c.user,
+                    nice: c.nice,
+                    system: c.system,
+                    idle: c.idle,
+                    iowait: c.iowait,
+                    irq: c.irq,
+                    soft_irq: c.soft_irq,
+                    steal: c.steal,
+                }).unwrap_or_default();
+
+                NodeSystemStat {
+                    node: msg.metadata.as_ref().map(|m| m.hostname.clone()).unwrap_or_default(),
+                    cpu_total,
+                    process_running: msg.process_running,
+                    process_blocked: msg.process_blocked,
+                }
+            })
+            .collect();
+
+        Ok(stats)
     }
 
     /// Get logs for a service (non-streaming, returns last N lines)
@@ -562,6 +598,50 @@ pub struct NodeCpuInfo {
     pub cpu_count: usize,
     pub model_name: String,
     pub mhz: f64,
+}
+
+/// System statistics for a node
+#[derive(Debug, Clone)]
+pub struct NodeSystemStat {
+    pub node: String,
+    pub cpu_total: CpuStat,
+    pub process_running: u64,
+    pub process_blocked: u64,
+}
+
+/// CPU statistics (cumulative time values)
+#[derive(Debug, Clone, Default)]
+pub struct CpuStat {
+    pub user: f64,
+    pub nice: f64,
+    pub system: f64,
+    pub idle: f64,
+    pub iowait: f64,
+    pub irq: f64,
+    pub soft_irq: f64,
+    pub steal: f64,
+}
+
+impl CpuStat {
+    /// Calculate total CPU time (all fields)
+    pub fn total(&self) -> f64 {
+        self.user + self.nice + self.system + self.idle + self.iowait + self.irq + self.soft_irq + self.steal
+    }
+
+    /// Calculate busy time (non-idle)
+    pub fn busy(&self) -> f64 {
+        self.user + self.nice + self.system + self.irq + self.soft_irq + self.steal
+    }
+
+    /// Calculate CPU usage percentage from delta between two measurements
+    pub fn usage_percent_from(prev: &CpuStat, curr: &CpuStat) -> f32 {
+        let delta_total = curr.total() - prev.total();
+        if delta_total <= 0.0 {
+            return 0.0;
+        }
+        let delta_busy = curr.busy() - prev.busy();
+        ((delta_busy / delta_total) * 100.0) as f32
+    }
 }
 
 // ==================== Etcd Types ====================

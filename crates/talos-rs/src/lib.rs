@@ -63,8 +63,8 @@ pub mod proto {
 
 pub use client::{
     // Node info types
-    MemInfo, NodeCpuInfo, NodeLoadAvg, NodeMemory, NodeServices, ServiceHealth, ServiceInfo,
-    TalosClient, VersionInfo,
+    CpuStat, MemInfo, NodeCpuInfo, NodeLoadAvg, NodeMemory, NodeServices, NodeSystemStat,
+    ServiceHealth, ServiceInfo, TalosClient, VersionInfo,
     // Etcd types
     EtcdAlarm, EtcdAlarmType, EtcdMemberInfo, EtcdMemberStatus,
     // Process types

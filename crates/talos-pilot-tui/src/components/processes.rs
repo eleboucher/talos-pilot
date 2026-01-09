@@ -10,11 +10,11 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 use std::time::Instant;
-use talos_rs::{ProcessInfo, ProcessState, TalosClient};
+use talos_rs::{CpuStat, ProcessInfo, ProcessState, TalosClient};
 
 /// Auto-refresh interval in seconds
 const AUTO_REFRESH_INTERVAL_SECS: u64 = 5;
@@ -105,6 +105,13 @@ pub struct ProcessesComponent {
     /// Memory usage percentage (from system, not process sum)
     memory_usage_percent: f32,
 
+    /// Previous CPU stats (for calculating usage delta)
+    prev_cpu_stat: Option<CpuStat>,
+    /// Current CPU usage percentage
+    cpu_usage_percent: f32,
+    /// Number of CPUs on node
+    cpu_count: usize,
+
     /// Loading state
     loading: bool,
     /// Error message
@@ -147,6 +154,9 @@ impl ProcessesComponent {
             total_memory: 0,
             memory_used: 0,
             memory_usage_percent: 0.0,
+            prev_cpu_stat: None,
+            cpu_usage_percent: 0.0,
+            cpu_count: 0,
             loading: true,
             error: None,
             auto_refresh: true,
@@ -175,11 +185,13 @@ impl ProcessesComponent {
 
         self.loading = true;
 
-        // Fetch processes and memory info in parallel
+        // Fetch processes, memory info, system stats, and CPU info in parallel
         let timeout = std::time::Duration::from_secs(10);
-        let (procs_result, mem_result) = tokio::join!(
+        let (procs_result, mem_result, stat_result, cpu_info_result) = tokio::join!(
             tokio::time::timeout(timeout, client.processes()),
             tokio::time::timeout(timeout, client.memory()),
+            tokio::time::timeout(timeout, client.system_stat()),
+            tokio::time::timeout(timeout, client.cpu_info()),
         );
 
         // Handle memory result (for total memory and usage)
@@ -190,6 +202,25 @@ impl ProcessesComponent {
                     self.memory_used = meminfo.mem_total.saturating_sub(meminfo.mem_available);
                     self.memory_usage_percent = meminfo.usage_percent();
                 }
+            }
+        }
+
+        // Handle CPU info result (for CPU count)
+        if let Ok(Ok(cpu_info)) = cpu_info_result {
+            if let Some(node_cpu) = cpu_info.into_iter().next() {
+                self.cpu_count = node_cpu.cpu_count;
+            }
+        }
+
+        // Handle system stat result (for CPU usage)
+        if let Ok(Ok(stats)) = stat_result {
+            if let Some(node_stat) = stats.into_iter().next() {
+                let curr_cpu = node_stat.cpu_total;
+                // Calculate CPU usage from delta if we have previous stats
+                if let Some(ref prev_cpu) = self.prev_cpu_stat {
+                    self.cpu_usage_percent = CpuStat::usage_percent_from(prev_cpu, &curr_cpu);
+                }
+                self.prev_cpu_stat = Some(curr_cpu);
             }
         }
 
@@ -425,11 +456,40 @@ impl ProcessesComponent {
         }
     }
 
+    /// Format bytes into human-readable string
+    fn format_bytes(bytes: u64) -> String {
+        const KB: u64 = 1024;
+        const MB: u64 = KB * 1024;
+        const GB: u64 = MB * 1024;
+
+        if bytes >= GB {
+            format!("{:.1}G", bytes as f64 / GB as f64)
+        } else if bytes >= MB {
+            format!("{:.0}M", bytes as f64 / MB as f64)
+        } else if bytes >= KB {
+            format!("{:.0}K", bytes as f64 / KB as f64)
+        } else {
+            format!("{}B", bytes)
+        }
+    }
+
     /// Draw the header
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
         let sort_indicator = format!("[{}▼]", self.sort_by.label());
         let tree_indicator = if self.tree_view { "[TREE]" } else { "" };
         let proc_count = format!("{} procs", self.display_entries.len());
+
+        // System resources info
+        let cpu_info = if self.cpu_count > 0 {
+            format!("{} CPU", self.cpu_count)
+        } else {
+            String::new()
+        };
+        let mem_info = if self.total_memory > 0 {
+            format!("{} RAM", Self::format_bytes(self.total_memory))
+        } else {
+            String::new()
+        };
 
         let mut spans = vec![
             Span::styled("Processes: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -437,9 +497,26 @@ impl ProcessesComponent {
             Span::styled(" (", Style::default().fg(Color::DarkGray)),
             Span::raw(&self.address),
             Span::styled(")", Style::default().fg(Color::DarkGray)),
-            Span::raw("  "),
-            Span::styled(sort_indicator, Style::default().fg(Color::Cyan)),
         ];
+
+        // Add system info
+        if !cpu_info.is_empty() || !mem_info.is_empty() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled("[", Style::default().fg(Color::DarkGray)));
+            if !cpu_info.is_empty() {
+                spans.push(Span::styled(&cpu_info, Style::default().fg(Color::Cyan)));
+            }
+            if !cpu_info.is_empty() && !mem_info.is_empty() {
+                spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+            }
+            if !mem_info.is_empty() {
+                spans.push(Span::styled(&mem_info, Style::default().fg(Color::Magenta)));
+            }
+            spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        }
+
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(sort_indicator, Style::default().fg(Color::Cyan)));
 
         if self.tree_view {
             spans.push(Span::raw(" "));
@@ -471,14 +548,22 @@ impl ProcessesComponent {
 
     /// Draw the summary bar with CPU/MEM bars and state counts
     fn draw_summary_bar(&self, frame: &mut Frame, area: Rect) {
+        // CPU bar with actual percentage (shows "--%" on first refresh since we need delta)
+        let (cpu_bar, cpu_color) = Self::usage_bar(self.cpu_usage_percent);
+        let cpu_pct = if self.prev_cpu_stat.is_some() {
+            format!("{:>3.0}%", self.cpu_usage_percent)
+        } else {
+            " --%".to_string()
+        };
+
         // Memory bar with actual percentage
         let (mem_bar, mem_color) = Self::usage_bar(self.memory_usage_percent);
         let mem_pct = format!("{:>3.0}%", self.memory_usage_percent);
 
         let mut spans = vec![
             Span::raw("CPU "),
-            Span::styled("░░░░░░░░░░", Style::default().fg(Color::DarkGray)),
-            Span::raw(" --% "),
+            Span::styled(cpu_bar, Style::default().fg(cpu_color)),
+            Span::raw(format!(" {} ", cpu_pct)),
             Span::raw("   MEM "),
             Span::styled(mem_bar, Style::default().fg(mem_color)),
             Span::raw(format!(" {} ", mem_pct)),
@@ -696,41 +781,52 @@ impl ProcessesComponent {
 
         let title = format!(" {} (PID {}) ", proc.command, proc.pid);
 
-        // Full command line (truncated if too long)
+        // Full command line with wrapping
         let full_cmd = proc.display_command();
-        let max_len = (area.width as usize).saturating_sub(4);
-        let cmd_display = if full_cmd.len() > max_len {
-            format!("{}...", &full_cmd[..max_len.saturating_sub(3)])
-        } else {
-            full_cmd.to_string()
+
+        // Split area: command takes most space, stats at bottom
+        let inner_area = {
+            let block = Block::default().title(title.clone()).borders(Borders::TOP);
+            block.inner(area)
         };
 
-        let content = vec![
-            Line::from(vec![
-                Span::raw("  "),
-                Span::raw(&cmd_display),
-            ]),
-            Line::from(vec![
-                Span::styled("  State: ", Style::default().add_modifier(Modifier::DIM)),
-                Span::styled(
-                    proc.state.description(),
-                    Style::default().fg(Self::state_color(&proc.state)),
-                ),
-                Span::raw("    "),
-                Span::styled("Threads: ", Style::default().add_modifier(Modifier::DIM)),
-                Span::raw(proc.threads.to_string()),
-                Span::raw("    "),
-                Span::styled("Virtual: ", Style::default().add_modifier(Modifier::DIM)),
-                Span::raw(proc.virtual_memory_human()),
-                Span::raw("    "),
-                Span::styled("Resident: ", Style::default().add_modifier(Modifier::DIM)),
-                Span::raw(proc.resident_memory_human()),
-            ]),
-        ];
+        let detail_chunks = Layout::vertical([
+            Constraint::Min(3),    // Command (wrapped)
+            Constraint::Length(1), // Stats line
+        ])
+        .split(inner_area);
 
+        // Draw the block border
         let block = Block::default().title(title).borders(Borders::TOP);
-        let para = Paragraph::new(content).block(block);
-        frame.render_widget(para, area);
+        frame.render_widget(block, area);
+
+        // Command paragraph with wrapping
+        let cmd_para = Paragraph::new(full_cmd)
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(cmd_para, detail_chunks[0]);
+
+        // Stats line
+        let stats = Line::from(vec![
+            Span::styled("State: ", Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(
+                proc.state.description(),
+                Style::default().fg(Self::state_color(&proc.state)),
+            ),
+            Span::raw("  "),
+            Span::styled("Threads: ", Style::default().add_modifier(Modifier::DIM)),
+            Span::raw(proc.threads.to_string()),
+            Span::raw("  "),
+            Span::styled("Virt: ", Style::default().add_modifier(Modifier::DIM)),
+            Span::raw(proc.virtual_memory_human()),
+            Span::raw("  "),
+            Span::styled("Res: ", Style::default().add_modifier(Modifier::DIM)),
+            Span::raw(proc.resident_memory_human()),
+            Span::raw("  "),
+            Span::styled("[y] yank", Style::default().fg(Color::DarkGray)),
+        ]);
+        let stats_para = Paragraph::new(stats);
+        frame.render_widget(stats_para, detail_chunks[1]);
     }
 
     /// Draw the footer with keybindings
@@ -843,7 +939,7 @@ impl Component for ProcessesComponent {
             Constraint::Length(warning_height),       // Warning (if any)
             Constraint::Length(1),                    // Filter bar (in filter mode) or spacer
             Constraint::Min(5),                       // Process table
-            Constraint::Length(4),                    // Detail section
+            Constraint::Length(7),                    // Detail section (increased for wrapped cmd)
             Constraint::Length(1),                    // Footer
         ])
         .split(area);
@@ -919,6 +1015,27 @@ impl ProcessesComponent {
                 self.rebuild_display_list();
                 self.selected = 0;
                 self.table_state.select(Some(0));
+                Ok(None)
+            }
+            KeyCode::Char('y') => {
+                // Yank (copy) the selected process command to clipboard
+                if let Some(proc) = self.selected_process() {
+                    let full_cmd = proc.display_command().to_string();
+                    match arboard::Clipboard::new() {
+                        Ok(mut clipboard) => {
+                            let preview_len = full_cmd.len().min(50);
+                            let preview = &full_cmd[..preview_len];
+                            if let Err(e) = clipboard.set_text(&full_cmd) {
+                                tracing::warn!("Failed to copy to clipboard: {}", e);
+                            } else {
+                                tracing::info!("Copied to clipboard: {}...", preview);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to access clipboard: {}", e);
+                        }
+                    }
+                }
                 Ok(None)
             }
             _ => Ok(None),

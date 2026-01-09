@@ -29,3 +29,6 @@ thiserror.workspace = true
 
 # Logging
 tracing.workspace = true
+
+# Clipboard
+arboard.workspace = true

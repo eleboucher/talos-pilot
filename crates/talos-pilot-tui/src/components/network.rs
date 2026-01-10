@@ -5,7 +5,7 @@
 use crate::action::Action;
 use crate::components::Component;
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -116,6 +116,11 @@ pub struct NetworkStatsComponent {
     /// Filter to listening only
     listening_only: bool,
 
+    /// Visual selection anchor (for V mode) - stores connection index
+    conn_selection_start: Option<usize>,
+    /// Viewport height for connection table (for page navigation)
+    conn_viewport_height: u16,
+
     /// Client for API calls
     client: Option<TalosClient>,
 }
@@ -159,6 +164,8 @@ impl NetworkStatsComponent {
             conn_table_state,
             conn_sort_by: ConnSortBy::State,
             listening_only: false,
+            conn_selection_start: None,
+            conn_viewport_height: 20, // Will be updated on draw
             client: None,
         }
     }
@@ -452,6 +459,126 @@ impl NetworkStatsComponent {
     /// Return to interfaces view
     fn exit_connections_view(&mut self) {
         self.view_mode = ViewMode::Interfaces;
+        self.conn_selection_start = None;
+    }
+
+    /// Check if visual selection mode is active for connections
+    fn conn_in_visual_mode(&self) -> bool {
+        self.conn_selection_start.is_some()
+    }
+
+    /// Get the selection range (start, end) inclusive
+    fn conn_selection_range(&self) -> Option<(usize, usize)> {
+        self.conn_selection_start.map(|anchor| {
+            (anchor.min(self.conn_selected), anchor.max(self.conn_selected))
+        })
+    }
+
+    /// Check if a connection index is within the selection
+    fn is_conn_selected(&self, idx: usize) -> bool {
+        if let Some((start, end)) = self.conn_selection_range() {
+            idx >= start && idx <= end
+        } else {
+            false
+        }
+    }
+
+    /// Format a connection as a string for copying
+    fn format_connection(conn: &ConnectionInfo) -> String {
+        let local = if !conn.local_ip.is_empty() {
+            format!("{}:{}", conn.local_ip, conn.local_port)
+        } else {
+            format!(":{}", conn.local_port)
+        };
+
+        let remote = if conn.remote_port > 0 {
+            format!("{}:{}", conn.remote_ip, conn.remote_port)
+        } else {
+            "*:*".to_string()
+        };
+
+        let state = match conn.state {
+            ConnectionState::Established => "ESTABLISHED",
+            ConnectionState::Listen => "LISTEN",
+            ConnectionState::TimeWait => "TIME_WAIT",
+            ConnectionState::CloseWait => "CLOSE_WAIT",
+            ConnectionState::SynSent => "SYN_SENT",
+            ConnectionState::SynRecv => "SYN_RECV",
+            ConnectionState::FinWait1 => "FIN_WAIT1",
+            ConnectionState::FinWait2 => "FIN_WAIT2",
+            ConnectionState::Closing => "CLOSING",
+            ConnectionState::LastAck => "LAST_ACK",
+            ConnectionState::Close => "CLOSE",
+            ConnectionState::Unknown => "UNKNOWN",
+        };
+
+        format!(
+            "{:<6} {:<22} {:<24} {:<12} RX:{} TX:{}",
+            conn.protocol, local, remote, state, conn.rx_queue, conn.tx_queue
+        )
+    }
+
+    /// Yank (copy) selected connections or current connection to clipboard
+    fn yank_conn_selection(&self) -> (bool, usize) {
+        let conns = self.filtered_connections();
+
+        let lines: Vec<String> = if let Some((start, end)) = self.conn_selection_range() {
+            // Yank all selected connections
+            (start..=end)
+                .filter_map(|idx| conns.get(idx).map(|c| Self::format_connection(c)))
+                .collect()
+        } else {
+            // Yank current connection only
+            conns.get(self.conn_selected)
+                .map(|c| vec![Self::format_connection(c)])
+                .unwrap_or_default()
+        };
+
+        if lines.is_empty() {
+            return (false, 0);
+        }
+
+        let count = lines.len();
+        let content = lines.join("\n");
+
+        // Copy to clipboard
+        let success = crate::clipboard::copy_to_clipboard(content).is_ok();
+
+        (success, count)
+    }
+
+    /// Page up in connection list
+    fn conn_page_up(&mut self) {
+        let page_size = self.conn_viewport_height.saturating_sub(2) as usize;
+        self.conn_selected = self.conn_selected.saturating_sub(page_size);
+        self.conn_table_state.select(Some(self.conn_selected));
+    }
+
+    /// Page down in connection list
+    fn conn_page_down(&mut self) {
+        let count = self.filtered_connections().len();
+        let page_size = self.conn_viewport_height.saturating_sub(2) as usize;
+        if count > 0 {
+            self.conn_selected = (self.conn_selected + page_size).min(count - 1);
+            self.conn_table_state.select(Some(self.conn_selected));
+        }
+    }
+
+    /// Half page up in connection list
+    fn conn_half_page_up(&mut self) {
+        let half = (self.conn_viewport_height / 2).max(1) as usize;
+        self.conn_selected = self.conn_selected.saturating_sub(half);
+        self.conn_table_state.select(Some(self.conn_selected));
+    }
+
+    /// Half page down in connection list
+    fn conn_half_page_down(&mut self) {
+        let count = self.filtered_connections().len();
+        let half = (self.conn_viewport_height / 2).max(1) as usize;
+        if count > 0 {
+            self.conn_selected = (self.conn_selected + half).min(count - 1);
+            self.conn_table_state.select(Some(self.conn_selected));
+        }
     }
 
     /// Draw the header
@@ -839,7 +966,7 @@ impl NetworkStatsComponent {
         let conn_count = self.filtered_connections().len();
         let filter_label = if self.listening_only { " [LISTEN ONLY]" } else { "" };
 
-        let spans = vec![
+        let mut spans = vec![
             Span::styled("Connections: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(&self.hostname),
             Span::styled(" (", Style::default().fg(Color::DarkGray)),
@@ -849,6 +976,16 @@ impl NetworkStatsComponent {
             Span::styled(format!("{} connections", conn_count), Style::default().fg(Color::DarkGray)),
             Span::styled(filter_label, Style::default().fg(Color::Yellow)),
         ];
+
+        // Show visual mode indicator
+        if let Some((start, end)) = self.conn_selection_range() {
+            let count = end - start + 1;
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                format!("-- VISUAL ({} lines) --", count),
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ));
+        }
 
         let header = Paragraph::new(Line::from(spans));
         frame.render_widget(header, area);
@@ -880,35 +1017,43 @@ impl NetworkStatsComponent {
 
     /// Draw the connection table
     fn draw_conn_table(&mut self, frame: &mut Frame, area: Rect) {
+        // Update viewport height for page navigation
+        self.conn_viewport_height = area.height;
+
         // Build column headers with sort indicators
         let state_header = if self.conn_sort_by == ConnSortBy::State { "STATE▼" } else { "STATE" };
-        let port_header = if self.conn_sort_by == ConnSortBy::Port { "LOCAL▼" } else { "LOCAL" };
+        let local_header = if self.conn_sort_by == ConnSortBy::Port { "LOCAL▼" } else { "LOCAL" };
 
         let header_cells = [
             Cell::from("PROTO"),
-            Cell::from(port_header),
+            Cell::from(local_header),
             Cell::from("REMOTE"),
             Cell::from(state_header),
-            Cell::from("RX/TX Q"),
+            Cell::from("RX Q"),
+            Cell::from("TX Q"),
         ];
         let header = Row::new(header_cells)
             .style(Style::default().add_modifier(Modifier::DIM))
             .bottom_margin(1);
 
         let conns = self.filtered_connections();
-        let rows: Vec<Row> = conns.iter().map(|conn| {
-            // Format local address
-            let local = if conn.local_port > 0 {
-                format!(":{}", conn.local_port)
+        let in_visual = self.conn_in_visual_mode();
+
+        let rows: Vec<Row> = conns.iter().enumerate().map(|(idx, conn)| {
+            // Format local address with IP
+            let local = if !conn.local_ip.is_empty() && conn.local_port > 0 {
+                format!("{}:{}", conn.local_ip, conn.local_port)
+            } else if conn.local_port > 0 {
+                format!("*:{}", conn.local_port)
             } else {
-                "-".to_string()
+                "*:*".to_string()
             };
 
             // Format remote address
             let remote = if conn.remote_port > 0 {
                 format!("{}:{}", conn.remote_ip, conn.remote_port)
             } else {
-                "-".to_string()
+                "*:*".to_string()
             };
 
             // Format state with color
@@ -927,24 +1072,33 @@ impl NetworkStatsComponent {
                 ConnectionState::Unknown => ("UNKNOWN", Color::DarkGray),
             };
 
-            // Format queues
-            let queues = format!("{}/{}", conn.rx_queue, conn.tx_queue);
+            // Check if this row is selected in visual mode
+            let is_selected = in_visual && self.is_conn_selected(idx);
+
+            // Row style - highlight selection with magenta background
+            let row_style = if is_selected {
+                Style::default().bg(Color::Rgb(60, 20, 60)) // Dark magenta
+            } else {
+                Style::default()
+            };
 
             Row::new([
                 Cell::from(conn.protocol.clone()),
                 Cell::from(local),
                 Cell::from(remote),
                 Cell::from(state_str).style(Style::default().fg(state_color)),
-                Cell::from(queues),
-            ])
+                Cell::from(conn.rx_queue.to_string()).style(Style::default().fg(Color::Green)),
+                Cell::from(conn.tx_queue.to_string()).style(Style::default().fg(Color::Blue)),
+            ]).style(row_style)
         }).collect();
 
         let widths = [
             Constraint::Length(6),    // PROTO
-            Constraint::Length(8),    // LOCAL
+            Constraint::Length(22),   // LOCAL (IP:port)
             Constraint::Length(24),   // REMOTE
             Constraint::Length(12),   // STATE
-            Constraint::Length(10),   // RX/TX Q
+            Constraint::Length(8),    // RX Q
+            Constraint::Length(8),    // TX Q
         ];
 
         let table = Table::new(rows, widths)
@@ -963,22 +1117,116 @@ impl NetworkStatsComponent {
     fn draw_conn_footer(&self, frame: &mut Frame, area: Rect) {
         let listen_label = if self.listening_only { "all" } else { "listen only" };
 
-        let spans = vec![
-            Span::styled("[1]", Style::default().fg(Color::Cyan)),
-            Span::raw(" state  "),
-            Span::styled("[2]", Style::default().fg(Color::Cyan)),
-            Span::raw(" port  "),
-            Span::styled("[l]", Style::default().fg(Color::Cyan)),
-            Span::raw(format!(" {}  ", listen_label)),
-            Span::styled("[r]", Style::default().fg(Color::Cyan)),
-            Span::raw(" refresh  "),
-            Span::styled("[q]", Style::default().fg(Color::Cyan)),
-            Span::raw(" back"),
-        ];
+        let spans = if self.conn_in_visual_mode() {
+            // Visual mode footer
+            vec![
+                Span::styled("[j/k]", Style::default().fg(Color::Cyan)),
+                Span::raw(" extend  "),
+                Span::styled("[y]", Style::default().fg(Color::Cyan)),
+                Span::raw(" yank  "),
+                Span::styled("[Esc/V]", Style::default().fg(Color::Cyan)),
+                Span::raw(" cancel  "),
+                Span::styled("[q]", Style::default().fg(Color::Cyan)),
+                Span::raw(" back"),
+            ]
+        } else {
+            // Normal mode footer
+            vec![
+                Span::styled("[1]", Style::default().fg(Color::Cyan)),
+                Span::raw(" state  "),
+                Span::styled("[2]", Style::default().fg(Color::Cyan)),
+                Span::raw(" port  "),
+                Span::styled("[l]", Style::default().fg(Color::Cyan)),
+                Span::raw(format!(" {}  ", listen_label)),
+                Span::styled("[V]", Style::default().fg(Color::Cyan)),
+                Span::raw(" visual  "),
+                Span::styled("[y]", Style::default().fg(Color::Cyan)),
+                Span::raw(" yank  "),
+                Span::styled("[r]", Style::default().fg(Color::Cyan)),
+                Span::raw(" refresh  "),
+                Span::styled("[q]", Style::default().fg(Color::Cyan)),
+                Span::raw(" back"),
+            ]
+        };
 
         let footer = Paragraph::new(Line::from(spans))
             .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(footer, area);
+    }
+
+    /// Draw the selected connection detail section
+    fn draw_conn_detail(&self, frame: &mut Frame, area: Rect) {
+        let conns = self.filtered_connections();
+        let Some(conn) = conns.get(self.conn_selected) else {
+            return;
+        };
+
+        // Format local address
+        let local_addr = if !conn.local_ip.is_empty() {
+            format!("{}:{}", conn.local_ip, conn.local_port)
+        } else {
+            format!("*:{}", conn.local_port)
+        };
+
+        // Format remote address
+        let remote_addr = if conn.remote_port > 0 {
+            format!("{}:{}", conn.remote_ip, conn.remote_port)
+        } else {
+            "*:*".to_string()
+        };
+
+        // State with color
+        let (state_str, state_color) = match conn.state {
+            ConnectionState::Established => ("ESTABLISHED", Color::Green),
+            ConnectionState::Listen => ("LISTEN", Color::Cyan),
+            ConnectionState::TimeWait => ("TIME_WAIT", Color::Yellow),
+            ConnectionState::CloseWait => ("CLOSE_WAIT", Color::Red),
+            ConnectionState::SynSent => ("SYN_SENT", Color::Yellow),
+            ConnectionState::SynRecv => ("SYN_RECV", Color::Yellow),
+            _ => ("OTHER", Color::DarkGray),
+        };
+
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("Protocol: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(&conn.protocol),
+                Span::raw("   "),
+                Span::styled("State: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(state_str, Style::default().fg(state_color).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("Local:  ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(&local_addr),
+                Span::raw("   "),
+                Span::styled("Remote: ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::raw(&remote_addr),
+            ]),
+            Line::from(vec![
+                Span::styled("RX Queue: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    conn.rx_queue.to_string(),
+                    if conn.rx_queue > 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) }
+                ),
+                Span::raw(" bytes   "),
+                Span::styled("TX Queue: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    conn.tx_queue.to_string(),
+                    if conn.tx_queue > 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) }
+                ),
+                Span::raw(" bytes"),
+            ]),
+        ];
+
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                " Selected Connection ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+
+        let detail = Paragraph::new(lines).block(block);
+        frame.render_widget(detail, area);
     }
 
     /// Draw the connection drill-down view
@@ -987,6 +1235,7 @@ impl NetworkStatsComponent {
             Constraint::Length(1),  // Header
             Constraint::Length(1),  // Summary bar
             Constraint::Min(5),     // Connection table
+            Constraint::Length(4),  // Detail section
             Constraint::Length(1),  // Footer
         ])
         .split(area);
@@ -994,7 +1243,8 @@ impl NetworkStatsComponent {
         self.draw_conn_header(frame, chunks[0]);
         self.draw_conn_summary_bar(frame, chunks[1]);
         self.draw_conn_table(frame, chunks[2]);
-        self.draw_conn_footer(frame, chunks[3]);
+        self.draw_conn_detail(frame, chunks[3]);
+        self.draw_conn_footer(frame, chunks[4]);
     }
 }
 
@@ -1047,10 +1297,21 @@ impl NetworkStatsComponent {
     /// Handle key events in Connections view
     fn handle_connections_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
+            // Quit/back
+            KeyCode::Char('q') => {
                 self.exit_connections_view();
                 Ok(None)
             }
+            KeyCode::Esc => {
+                if self.conn_in_visual_mode() {
+                    self.conn_selection_start = None;
+                } else {
+                    self.exit_connections_view();
+                }
+                Ok(None)
+            }
+
+            // Navigation
             KeyCode::Char('j') | KeyCode::Down => {
                 self.conn_select_next();
                 Ok(None)
@@ -1067,25 +1328,76 @@ impl NetworkStatsComponent {
                 self.conn_select_last();
                 Ok(None)
             }
+
+            // Page navigation
+            KeyCode::PageUp => {
+                self.conn_page_up();
+                Ok(None)
+            }
+            KeyCode::PageDown => {
+                self.conn_page_down();
+                Ok(None)
+            }
+
+            // Half-page scroll (Ctrl+U / Ctrl+D)
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.conn_half_page_up();
+                Ok(None)
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.conn_half_page_down();
+                Ok(None)
+            }
+
+            // Sorting
             KeyCode::Char('1') => {
                 self.conn_sort_by = ConnSortBy::State;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
+                self.conn_selection_start = None;
                 Ok(None)
             }
             KeyCode::Char('2') => {
                 self.conn_sort_by = ConnSortBy::Port;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
+                self.conn_selection_start = None;
                 Ok(None)
             }
+
+            // Filter
             KeyCode::Char('l') => {
                 self.listening_only = !self.listening_only;
                 self.conn_selected = 0;
                 self.conn_table_state.select(Some(0));
+                self.conn_selection_start = None;
                 Ok(None)
             }
+
+            // Visual line selection mode
+            KeyCode::Char('V') => {
+                if self.conn_in_visual_mode() {
+                    self.conn_selection_start = None;
+                } else {
+                    self.conn_selection_start = Some(self.conn_selected);
+                }
+                Ok(None)
+            }
+
+            // Yank selection or current line to clipboard
+            KeyCode::Char('y') => {
+                let (success, count) = self.yank_conn_selection();
+                if success {
+                    tracing::info!("Copied {} connection(s) to clipboard", count);
+                }
+                // Clear visual selection after yank
+                self.conn_selection_start = None;
+                Ok(None)
+            }
+
+            // Refresh
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),
+
             _ => Ok(None),
         }
     }

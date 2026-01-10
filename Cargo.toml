@@ -57,6 +57,9 @@ arboard = "3"
 kube = { version = "0.98", features = ["client", "config", "runtime", "rustls-tls"], default-features = false }
 k8s-openapi = { version = "0.24", features = ["latest"] }
 
+# Certificate parsing
+x509-parser = "0.16"
+
 # Internal crates
 talos-rs = { path = "crates/talos-rs" }
 talos-pilot-core = { path = "crates/talos-pilot-core" }

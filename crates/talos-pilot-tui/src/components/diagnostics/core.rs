@@ -2,6 +2,7 @@
 //!
 //! These checks are CNI-agnostic and addon-agnostic.
 
+use super::pki::{self, CertStatus, CertificateInfo};
 use super::types::{DiagnosticCheck, DiagnosticContext, DiagnosticFix, FixAction};
 use talos_rs::TalosClient;
 
@@ -255,4 +256,198 @@ pub async fn check_cni_health(client: &TalosClient) -> (bool, Option<String>) {
 
     // No CNI config files found
     (false, Some("No CNI configuration files found".to_string()))
+}
+
+/// Run certificate expiry checks
+///
+/// Checks:
+/// - talosconfig client certificate (local file)
+/// - talosconfig CA certificate (local file)
+/// - kubeconfig client certificate (from API)
+pub async fn run_certificate_checks(
+    client: &TalosClient,
+    _ctx: &DiagnosticContext,
+) -> Vec<DiagnosticCheck> {
+    let mut checks = Vec::new();
+
+    // Load talosconfig and check certificates
+    match talos_rs::TalosConfig::load_default() {
+        Ok(config) => {
+            if let Some(context) = config.current_context() {
+                // Check client certificate
+                match context.client_cert_pem() {
+                    Ok(pem_data) => {
+                        match pki::parse_certificate("talosconfig", &pem_data) {
+                            Ok(cert_info) => {
+                                checks.push(cert_to_diagnostic_check(
+                                    "talosconfig_cert",
+                                    "talosconfig",
+                                    &cert_info,
+                                ));
+                            }
+                            Err(e) => {
+                                checks.push(
+                                    DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
+                                        .with_details(&format!("Failed to parse certificate: {}", e)),
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        checks.push(
+                            DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
+                                .with_details(&format!("Failed to decode certificate: {}", e)),
+                        );
+                    }
+                }
+
+                // Check CA certificate
+                match context.ca_pem() {
+                    Ok(pem_data) => {
+                        match pki::parse_certificate("Talos CA", &pem_data) {
+                            Ok(cert_info) => {
+                                checks.push(cert_to_diagnostic_check(
+                                    "talos_ca",
+                                    "Talos CA",
+                                    &cert_info,
+                                ));
+                            }
+                            Err(e) => {
+                                checks.push(
+                                    DiagnosticCheck::unknown("talos_ca", "Talos CA")
+                                        .with_details(&format!("Failed to parse CA: {}", e)),
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        checks.push(
+                            DiagnosticCheck::unknown("talos_ca", "Talos CA")
+                                .with_details(&format!("Failed to decode CA: {}", e)),
+                        );
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            checks.push(
+                DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
+                    .with_details(&format!("Failed to load talosconfig: {}", e)),
+            );
+        }
+    }
+
+    // Check kubeconfig certificate (from Talos API)
+    match client.kubeconfig().await {
+        Ok(kubeconfig_yaml) => {
+            // Parse kubeconfig YAML to extract client certificate
+            if let Ok(kc) = serde_yaml::from_str::<serde_yaml::Value>(&kubeconfig_yaml) {
+                if let Some(users) = kc.get("users").and_then(|u| u.as_sequence()) {
+                    for user in users {
+                        if let Some(user_data) = user.get("user") {
+                            // Check for client-certificate-data (base64 encoded PEM)
+                            if let Some(cert_data) = user_data
+                                .get("client-certificate-data")
+                                .and_then(|c| c.as_str())
+                            {
+                                match pki::parse_base64_certificate("kubeconfig", cert_data) {
+                                    Ok(cert_info) => {
+                                        checks.push(cert_to_diagnostic_check(
+                                            "kubeconfig_cert",
+                                            "kubeconfig",
+                                            &cert_info,
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        checks.push(
+                                            DiagnosticCheck::unknown("kubeconfig_cert", "kubeconfig")
+                                                .with_details(&format!("Failed to parse kubeconfig cert: {}", e)),
+                                        );
+                                    }
+                                }
+                                break; // Only check first user
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            // kubeconfig may not be available yet during cluster bootstrap
+            checks.push(
+                DiagnosticCheck::unknown("kubeconfig_cert", "kubeconfig")
+                    .with_details(&format!("kubeconfig not available: {}", e)),
+            );
+        }
+    }
+
+    checks
+}
+
+/// Convert a CertificateInfo to a DiagnosticCheck
+fn cert_to_diagnostic_check(id: &str, name: &str, cert: &CertificateInfo) -> DiagnosticCheck {
+    let message = if cert.days_remaining <= 0 {
+        format!("EXPIRED {} ago", cert.time_remaining.replace("expired ", ""))
+    } else {
+        format!("expires in {}", cert.time_remaining)
+    };
+
+    let details = format!(
+        "Subject: {}\nIssuer: {}\nExpires: {}\nDays remaining: {}",
+        cert.subject,
+        cert.issuer,
+        cert.not_after.format("%Y-%m-%d %H:%M:%S UTC"),
+        cert.days_remaining
+    );
+
+    let renewal_hint = match name {
+        "talosconfig" => Some("To renew, run:\n  talosctl config new --roles=os:admin new-admin.yaml"),
+        "kubeconfig" => Some("Kubeconfig certificates are managed by Talos.\nRegenerate with: talosctl kubeconfig"),
+        _ => None,
+    };
+
+    let full_details = if let Some(hint) = renewal_hint {
+        format!("{}\n\n{}", details, hint)
+    } else {
+        details
+    };
+
+    match cert.status {
+        CertStatus::Valid => {
+            DiagnosticCheck::pass(id, name, &message)
+                .with_details(&full_details)
+        }
+        CertStatus::Warning => {
+            let mut check = DiagnosticCheck::warn(id, name, &message)
+                .with_details(&full_details);
+
+            // Add fix suggestion for talosconfig
+            if name == "talosconfig" {
+                check = check.with_fix(DiagnosticFix {
+                    description: "Renew talosconfig certificate".to_string(),
+                    action: FixAction::HostCommand {
+                        command: "talosctl config new --roles=os:admin new-admin.yaml".to_string(),
+                        description: "Generate new talosconfig".to_string(),
+                    },
+                });
+            }
+            check
+        }
+        CertStatus::Critical | CertStatus::Expired => {
+            let mut check = DiagnosticCheck::fail(id, name, &message, None)
+                .with_details(&full_details);
+
+            // Add fix suggestion for talosconfig
+            if name == "talosconfig" {
+                check = check.with_fix(DiagnosticFix {
+                    description: "Renew talosconfig certificate (URGENT)".to_string(),
+                    action: FixAction::HostCommand {
+                        command: "talosctl config new --roles=os:admin new-admin.yaml".to_string(),
+                        description: "Generate new talosconfig".to_string(),
+                    },
+                });
+            }
+            check
+        }
+    }
 }

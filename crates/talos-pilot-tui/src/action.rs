@@ -37,6 +37,8 @@ pub enum Action {
     ShowDiagnostics(String, String, String),
     /// Apply a diagnostic fix (triggered from confirmation dialog)
     ApplyDiagnosticFix,
+    /// Show security/certificates view
+    ShowSecurity,
 
     // UI state
     Tick,

@@ -10,6 +10,7 @@ pub mod logs;
 pub mod multi_logs;
 pub mod network;
 pub mod processes;
+pub mod security;
 
 pub use cluster::ClusterComponent;
 pub use diagnostics::DiagnosticsComponent;
@@ -19,6 +20,7 @@ pub use logs::LogsComponent;
 pub use multi_logs::MultiLogsComponent;
 pub use network::NetworkStatsComponent;
 pub use processes::ProcessesComponent;
+pub use security::SecurityComponent;
 
 use crate::action::Action;
 use color_eyre::Result;

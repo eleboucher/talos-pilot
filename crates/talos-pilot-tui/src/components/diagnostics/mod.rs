@@ -13,6 +13,7 @@ pub mod addons;
 pub mod cni;
 pub mod core;
 pub mod k8s;
+pub mod pki;
 pub mod types;
 
 use crate::action::Action;
@@ -464,9 +465,13 @@ impl DiagnosticsComponent {
 
         let result = tokio::time::timeout(timeout, async {
             // Run core checks
-            let system_checks = core::run_system_checks(client, &self.context).await;
+            let mut system_checks = core::run_system_checks(client, &self.context).await;
             let kubernetes_checks = core::run_kubernetes_checks(client, &self.context).await;
             let service_checks = core::run_service_checks(client, &self.context).await;
+
+            // Run certificate checks and add to system checks
+            let cert_checks = core::run_certificate_checks(client, &self.context).await;
+            system_checks.extend(cert_checks);
 
             // Run CNI-specific checks
             let cni_checks = cni::run_cni_checks(client, &self.context).await;

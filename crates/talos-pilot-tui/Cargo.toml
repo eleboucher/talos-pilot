@@ -39,3 +39,10 @@ k8s-openapi.workspace = true
 
 # Serialization
 serde_yaml.workspace = true
+base64.workspace = true
+
+# Certificate parsing
+x509-parser.workspace = true
+
+# Date/time handling
+chrono.workspace = true

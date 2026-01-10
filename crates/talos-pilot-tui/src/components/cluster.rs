@@ -469,6 +469,11 @@ impl Component for ClusterComponent {
                     Ok(None)
                 }
             }
+            KeyCode::Char('c') => {
+                // View security/certificates
+                tracing::info!("Cluster: pressing c, showing security view");
+                Ok(Some(Action::ShowSecurity))
+            }
             _ => Ok(None),
         }
     }
@@ -572,7 +577,13 @@ impl Component for ClusterComponent {
             Span::raw(" procs").dim(),
             Span::raw("  "),
             Span::raw("[n]").fg(Color::Yellow),
-            Span::raw(" network").dim(),
+            Span::raw(" net").dim(),
+            Span::raw("  "),
+            Span::raw("[d]").fg(Color::Yellow),
+            Span::raw(" diag").dim(),
+            Span::raw("  "),
+            Span::raw("[c]").fg(Color::Yellow),
+            Span::raw(" certs").dim(),
         ]))
         .block(
             Block::default()

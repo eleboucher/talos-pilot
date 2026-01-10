@@ -1,7 +1,7 @@
 //! Application state and main loop
 
 use crate::action::Action;
-use crate::components::{ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, MultiLogsComponent, NetworkStatsComponent, ProcessesComponent};
+use crate::components::{ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, MultiLogsComponent, NetworkStatsComponent, ProcessesComponent, SecurityComponent};
 use crate::tui::{self, Tui};
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyEventKind};
@@ -17,6 +17,7 @@ enum View {
     Processes,
     Network,
     Diagnostics,
+    Security,
 }
 
 /// Main application state
@@ -37,6 +38,8 @@ pub struct App {
     network: Option<NetworkStatsComponent>,
     /// Diagnostics component (created when viewing diagnostics)
     diagnostics: Option<DiagnosticsComponent>,
+    /// Security component (created when viewing certificates)
+    security: Option<SecurityComponent>,
     /// Number of log lines to fetch per service
     tail_lines: i32,
     /// Tick rate for animations (ms)
@@ -75,6 +78,7 @@ impl App {
             processes: None,
             network: None,
             diagnostics: None,
+            security: None,
             tail_lines,
             tick_rate: Duration::from_millis(100),
             action_rx,
@@ -137,6 +141,11 @@ impl App {
                             let _ = diagnostics.draw(frame, area);
                         }
                     }
+                    View::Security => {
+                        if let Some(security) = &mut self.security {
+                            let _ = security.draw(frame, area);
+                        }
+                    }
                 }
             })?;
 
@@ -177,6 +186,13 @@ impl App {
                             View::Diagnostics => {
                                 if let Some(diagnostics) = &mut self.diagnostics {
                                     diagnostics.handle_key_event(key)?
+                                } else {
+                                    None
+                                }
+                            }
+                            View::Security => {
+                                if let Some(security) = &mut self.security {
+                                    security.handle_key_event(key)?
                                 } else {
                                     None
                                 }
@@ -253,6 +269,9 @@ impl App {
                     View::Diagnostics => {
                         self.diagnostics = None;
                     }
+                    View::Security => {
+                        self.security = None;
+                    }
                     View::Cluster => {}
                 }
                 // Return to cluster view
@@ -297,6 +316,13 @@ impl App {
                     View::Diagnostics => {
                         if let Some(diagnostics) = &mut self.diagnostics
                             && let Some(next_action) = diagnostics.update(Action::Tick)?
+                        {
+                            Box::pin(self.handle_action(next_action)).await?;
+                        }
+                    }
+                    View::Security => {
+                        if let Some(security) = &mut self.security
+                            && let Some(next_action) = security.update(Action::Tick)?
                         {
                             Box::pin(self.handle_action(next_action)).await?;
                         }
@@ -352,6 +378,13 @@ impl App {
                         if let Some(diagnostics) = &mut self.diagnostics {
                             if let Err(e) = diagnostics.refresh().await {
                                 diagnostics.set_error(e.to_string());
+                            }
+                        }
+                    }
+                    View::Security => {
+                        if let Some(security) = &mut self.security {
+                            if let Err(e) = security.refresh().await {
+                                security.set_error(e.to_string());
                             }
                         }
                     }
@@ -487,6 +520,26 @@ impl App {
                 self.network = Some(network);
                 self.view = View::Network;
             }
+            Action::ShowSecurity => {
+                // Switch to security/certificates view
+                tracing::info!("Viewing security/certificates");
+
+                // Create security component
+                let mut security = SecurityComponent::new(String::new());
+
+                // Set the client and refresh data
+                if let Some(client) = self.cluster.client() {
+                    security.set_client(client.clone());
+                }
+
+                if let Err(e) = security.refresh().await {
+                    tracing::error!("Security refresh error: {:?}", e);
+                    security.set_error(e.to_string());
+                }
+
+                self.security = Some(security);
+                self.view = View::Security;
+            }
             _ => {
                 // Forward to current component
                 match self.view {
@@ -526,6 +579,13 @@ impl App {
                     View::Diagnostics => {
                         if let Some(diagnostics) = &mut self.diagnostics
                             && let Some(next_action) = diagnostics.update(action)?
+                        {
+                            Box::pin(self.handle_action(next_action)).await?;
+                        }
+                    }
+                    View::Security => {
+                        if let Some(security) = &mut self.security
+                            && let Some(next_action) = security.update(action)?
                         {
                             Box::pin(self.handle_action(next_action)).await?;
                         }

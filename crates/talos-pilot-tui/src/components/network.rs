@@ -79,6 +79,19 @@ pub enum PendingAction {
     RestartService(String, String),
 }
 
+/// Command output entry for the output pane
+#[derive(Debug, Clone)]
+pub struct CommandOutput {
+    /// Command description (e.g., "Restart apid")
+    pub command: String,
+    /// Output lines from the command
+    pub lines: Vec<String>,
+    /// When the command was executed
+    pub timestamp: Instant,
+    /// Whether the command succeeded
+    pub success: bool,
+}
+
 /// Network stats component for viewing node network interfaces
 pub struct NetworkStatsComponent {
     /// Node hostname
@@ -159,6 +172,11 @@ pub struct NetworkStatsComponent {
     /// Service ID pending restart (to be executed in update)
     pending_restart_service: Option<String>,
 
+    /// Show command output pane at bottom
+    show_output_pane: bool,
+    /// Command output history (most recent first)
+    command_output: Option<CommandOutput>,
+
     /// Client for API calls
     client: Option<TalosClient>,
 }
@@ -211,6 +229,8 @@ impl NetworkStatsComponent {
             pending_action: None,
             status_message: None,
             pending_restart_service: None,
+            show_output_pane: false,
+            command_output: None,
             client: None,
         }
     }
@@ -1744,19 +1764,17 @@ impl NetworkStatsComponent {
     fn execute_pending_action(&mut self, action: PendingAction) -> Result<Option<Action>> {
         match action {
             PendingAction::RestartService(service_id, service_name) => {
-                // We need to restart the service async, so we'll return an action
-                // that the app can handle. For now, show a status message.
-                // The actual restart will be handled via the refresh mechanism.
+                // Show status message while waiting
                 self.status_message = Some((
                     format!("Restarting {}...", service_name),
                     Instant::now(),
                 ));
 
-                // Spawn the restart in the background
-                // Note: We can't easily do async here, so we'll store that we need to restart
-                // and handle it in the update method
+                // Store that we need to restart - will be executed on next refresh
                 self.pending_restart_service = Some(service_id);
-                Ok(None)
+
+                // Trigger immediate refresh to execute the restart
+                Ok(Some(Action::Refresh))
             }
         }
     }
@@ -1826,6 +1844,14 @@ impl NetworkStatsComponent {
 
 impl Component for NetworkStatsComponent {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        // If output pane is shown, Esc closes it
+        if self.show_output_pane {
+            if matches!(key.code, KeyCode::Esc) {
+                self.show_output_pane = false;
+                return Ok(None);
+            }
+        }
+
         // If there's a pending confirmation, handle that first
         if self.pending_action.is_some() {
             return self.handle_confirmation_key(key);
@@ -1874,9 +1900,26 @@ impl Component for NetworkStatsComponent {
             return Ok(());
         }
 
+        // Split area for output pane if shown
+        let (main_area, output_area) = if self.show_output_pane {
+            let chunks = Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(10), // Output pane height
+            ])
+            .split(area);
+            (chunks[0], Some(chunks[1]))
+        } else {
+            (area, None)
+        };
+
         match self.view_mode {
-            ViewMode::Interfaces => self.draw_interfaces_view(frame, area),
-            ViewMode::Connections => self.draw_connections_view(frame, area),
+            ViewMode::Interfaces => self.draw_interfaces_view(frame, main_area),
+            ViewMode::Connections => self.draw_connections_view(frame, main_area),
+        }
+
+        // Draw output pane if shown
+        if let Some(output_rect) = output_area {
+            self.draw_output_pane(frame, output_rect);
         }
 
         // Draw confirmation dialog overlay if pending
@@ -1902,28 +1945,69 @@ impl NetworkStatsComponent {
         };
 
         let Some(client) = &self.client else {
-            self.status_message = Some(("No client configured".to_string(), Instant::now()));
+            let output = CommandOutput {
+                command: format!("Restart {}", service_id),
+                lines: vec!["Error: No client configured".to_string()],
+                timestamp: Instant::now(),
+                success: false,
+            };
+            self.command_output = Some(output);
+            self.show_output_pane = true;
             return Ok(None);
         };
 
         match client.service_restart(&service_id).await {
             Ok(results) => {
-                let msg = if let Some(result) = results.first() {
-                    if result.response.is_empty() {
-                        format!("Service '{}' restarted successfully", service_id)
-                    } else {
-                        format!("Service '{}': {}", service_id, result.response)
+                let mut lines = Vec::new();
+                lines.push(format!("Restarting service: {}", service_id));
+                lines.push(String::new());
+
+                if let Some(result) = results.first() {
+                    if !result.response.is_empty() {
+                        lines.push(format!("Response: {}", result.response));
                     }
-                } else {
-                    format!("Service '{}' restart requested", service_id)
+                    // Show metadata if available
+                    if !result.node.is_empty() {
+                        lines.push(format!("Node: {}", result.node));
+                    }
+                }
+
+                lines.push(String::new());
+                lines.push("Service restart initiated successfully.".to_string());
+                lines.push("The service will restart momentarily.".to_string());
+
+                let output = CommandOutput {
+                    command: format!("Restart {}", service_id),
+                    lines,
+                    timestamp: Instant::now(),
+                    success: true,
                 };
-                self.status_message = Some((msg.clone(), Instant::now()));
-                Ok(Some(msg))
+                self.command_output = Some(output);
+                self.show_output_pane = true;
+                self.status_message = None; // Clear status message, using output pane instead
+
+                Ok(Some(format!("Service '{}' restarted", service_id)))
             }
             Err(e) => {
-                let msg = format!("Failed to restart '{}': {}", service_id, e);
-                self.status_message = Some((msg.clone(), Instant::now()));
-                Ok(Some(msg))
+                let lines = vec![
+                    format!("Restarting service: {}", service_id),
+                    String::new(),
+                    format!("Error: {}", e),
+                    String::new(),
+                    "The service restart failed. Check the error above.".to_string(),
+                ];
+
+                let output = CommandOutput {
+                    command: format!("Restart {}", service_id),
+                    lines,
+                    timestamp: Instant::now(),
+                    success: false,
+                };
+                self.command_output = Some(output);
+                self.show_output_pane = true;
+                self.status_message = None;
+
+                Ok(Some(format!("Failed to restart '{}': {}", service_id, e)))
             }
         }
     }
@@ -2018,5 +2102,60 @@ impl NetworkStatsComponent {
 
         frame.render_widget(block, msg_area);
         frame.render_widget(status, inner);
+    }
+
+    /// Draw the command output pane at the bottom
+    fn draw_output_pane(&self, frame: &mut Frame, area: Rect) {
+        let Some(ref output) = self.command_output else {
+            return;
+        };
+
+        // Determine border color based on success/failure
+        let border_color = if output.success {
+            Color::Green
+        } else {
+            Color::Red
+        };
+
+        let title = format!(
+            " {} {} ",
+            if output.success { "✓" } else { "✗" },
+            output.command
+        );
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color))
+            .title(title)
+            .title_style(Style::default().fg(border_color).add_modifier(Modifier::BOLD));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Build output lines
+        let mut lines: Vec<Line> = output
+            .lines
+            .iter()
+            .map(|l| {
+                let style = if l.starts_with("Error:") {
+                    Style::default().fg(Color::Red)
+                } else if l.contains("successfully") || l.contains("initiated") {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(Span::styled(l.as_str(), style))
+            })
+            .collect();
+
+        // Add footer hint
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Press Esc to close",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let paragraph = Paragraph::new(lines);
+        frame.render_widget(paragraph, inner);
     }
 }

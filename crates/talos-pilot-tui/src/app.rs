@@ -328,6 +328,10 @@ impl App {
                     }
                     View::Network => {
                         if let Some(network) = &mut self.network {
+                            // Check for pending service restart first
+                            if network.has_pending_restart() {
+                                let _ = network.perform_pending_restart().await;
+                            }
                             if let Err(e) = network.refresh().await {
                                 network.set_error(e.to_string());
                             }

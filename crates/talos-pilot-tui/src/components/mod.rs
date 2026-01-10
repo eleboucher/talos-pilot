@@ -3,6 +3,7 @@
 //! Based on the ratatui Component template pattern.
 
 pub mod cluster;
+pub mod diagnostics;
 pub mod etcd;
 pub mod home;
 pub mod logs;
@@ -11,6 +12,7 @@ pub mod network;
 pub mod processes;
 
 pub use cluster::ClusterComponent;
+pub use diagnostics::DiagnosticsComponent;
 pub use etcd::EtcdComponent;
 pub use home::HomeComponent;
 pub use logs::LogsComponent;

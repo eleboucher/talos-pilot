@@ -1,7 +1,7 @@
 //! Application state and main loop
 
 use crate::action::Action;
-use crate::components::{ClusterComponent, Component, EtcdComponent, MultiLogsComponent, NetworkStatsComponent, ProcessesComponent};
+use crate::components::{ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, MultiLogsComponent, NetworkStatsComponent, ProcessesComponent};
 use crate::tui::{self, Tui};
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyEventKind};
@@ -16,6 +16,7 @@ enum View {
     Etcd,
     Processes,
     Network,
+    Diagnostics,
 }
 
 /// Main application state
@@ -34,6 +35,8 @@ pub struct App {
     processes: Option<ProcessesComponent>,
     /// Network stats component (created when viewing network)
     network: Option<NetworkStatsComponent>,
+    /// Diagnostics component (created when viewing diagnostics)
+    diagnostics: Option<DiagnosticsComponent>,
     /// Number of log lines to fetch per service
     tail_lines: i32,
     /// Tick rate for animations (ms)
@@ -71,6 +74,7 @@ impl App {
             etcd: None,
             processes: None,
             network: None,
+            diagnostics: None,
             tail_lines,
             tick_rate: Duration::from_millis(100),
             action_rx,
@@ -128,6 +132,11 @@ impl App {
                             let _ = network.draw(frame, area);
                         }
                     }
+                    View::Diagnostics => {
+                        if let Some(diagnostics) = &mut self.diagnostics {
+                            let _ = diagnostics.draw(frame, area);
+                        }
+                    }
                 }
             })?;
 
@@ -161,6 +170,13 @@ impl App {
                             View::Network => {
                                 if let Some(network) = &mut self.network {
                                     network.handle_key_event(key)?
+                                } else {
+                                    None
+                                }
+                            }
+                            View::Diagnostics => {
+                                if let Some(diagnostics) = &mut self.diagnostics {
+                                    diagnostics.handle_key_event(key)?
                                 } else {
                                     None
                                 }
@@ -234,6 +250,9 @@ impl App {
                     View::Network => {
                         self.network = None;
                     }
+                    View::Diagnostics => {
+                        self.diagnostics = None;
+                    }
                     View::Cluster => {}
                 }
                 // Return to cluster view
@@ -275,6 +294,13 @@ impl App {
                             Box::pin(self.handle_action(next_action)).await?;
                         }
                     }
+                    View::Diagnostics => {
+                        if let Some(diagnostics) = &mut self.diagnostics
+                            && let Some(next_action) = diagnostics.update(Action::Tick)?
+                        {
+                            Box::pin(self.handle_action(next_action)).await?;
+                        }
+                    }
                 }
             }
             Action::Resize(_w, _h) => {
@@ -309,6 +335,13 @@ impl App {
                     }
                     View::MultiLogs => {
                         // Multi-logs handles its own streaming refresh
+                    }
+                    View::Diagnostics => {
+                        if let Some(diagnostics) = &mut self.diagnostics {
+                            if let Err(e) = diagnostics.refresh().await {
+                                diagnostics.set_error(e.to_string());
+                            }
+                        }
                     }
                 }
             }
@@ -346,6 +379,39 @@ impl App {
             }
             Action::ShowNodeDetails(_, _) => {
                 // Legacy - no longer used, we use ShowMultiLogs now
+            }
+            Action::ShowDiagnostics(hostname, address, role) => {
+                // Switch to diagnostics view for a node
+                tracing::info!("ShowDiagnostics: hostname='{}', address='{}', role='{}'", hostname, address, role);
+
+                // Create diagnostics component
+                let mut diagnostics = DiagnosticsComponent::new(hostname, address.clone(), role);
+
+                // Set the client and refresh data
+                if let Some(client) = self.cluster.client() {
+                    // Create a client configured for this specific node
+                    let node_client = client.with_node(&address);
+                    diagnostics.set_client(node_client);
+                    if let Err(e) = diagnostics.refresh().await {
+                        tracing::error!("Diagnostics refresh error: {:?}", e);
+                        diagnostics.set_error(e.to_string());
+                    }
+                }
+
+                self.diagnostics = Some(diagnostics);
+                self.view = View::Diagnostics;
+            }
+            Action::ApplyDiagnosticFix => {
+                // Apply a diagnostic fix (from confirmation dialog)
+                if let Some(diagnostics) = &mut self.diagnostics {
+                    if let Err(e) = diagnostics.apply_pending_fix().await {
+                        diagnostics.set_error(e.to_string());
+                    }
+                    // Refresh after applying fix
+                    if let Err(e) = diagnostics.refresh().await {
+                        diagnostics.set_error(e.to_string());
+                    }
+                }
             }
             Action::ShowEtcd => {
                 // Switch to etcd status view
@@ -441,6 +507,13 @@ impl App {
                     View::Network => {
                         if let Some(network) = &mut self.network
                             && let Some(next_action) = network.update(action)?
+                        {
+                            Box::pin(self.handle_action(next_action)).await?;
+                        }
+                    }
+                    View::Diagnostics => {
+                        if let Some(diagnostics) = &mut self.diagnostics
+                            && let Some(next_action) = diagnostics.update(action)?
                         {
                             Box::pin(self.handle_action(next_action)).await?;
                         }

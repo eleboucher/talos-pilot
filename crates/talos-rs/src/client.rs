@@ -623,6 +623,109 @@ impl TalosClient {
 
         Ok(result)
     }
+
+    /// Get dmesg (kernel ring buffer) output
+    ///
+    /// # Arguments
+    /// * `follow` - If true, continue streaming new messages (not recommended for non-async use)
+    /// * `tail` - If true, only return recent messages
+    pub async fn dmesg(&self, follow: bool, tail: bool) -> Result<String, TalosError> {
+        use crate::proto::machine::DmesgRequest;
+
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(DmesgRequest { follow, tail }));
+
+        let response = client.dmesg(request).await?;
+        let mut stream = response.into_inner();
+
+        let mut output = String::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(data) => {
+                    if let Ok(text) = String::from_utf8(data.bytes) {
+                        output.push_str(&text);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Dmesg stream error: {}", e);
+                    break;
+                }
+            }
+        }
+
+        Ok(output)
+    }
+
+    /// Apply a configuration patch to the node
+    ///
+    /// # Arguments
+    /// * `config_yaml` - YAML configuration to apply (can be a patch or full config)
+    /// * `mode` - How to apply the configuration
+    /// * `dry_run` - If true, validate but don't apply
+    pub async fn apply_configuration(
+        &self,
+        config_yaml: &str,
+        mode: ApplyMode,
+        dry_run: bool,
+    ) -> Result<Vec<ApplyConfigResult>, TalosError> {
+        use crate::proto::machine::{ApplyConfigurationRequest, apply_configuration_request::Mode};
+
+        let proto_mode = match mode {
+            ApplyMode::Reboot => Mode::Reboot,
+            ApplyMode::Auto => Mode::Auto,
+            ApplyMode::NoReboot => Mode::NoReboot,
+            ApplyMode::Staged => Mode::Staged,
+        };
+
+        let mut client = self.machine_client();
+        let request = self.with_nodes(Request::new(ApplyConfigurationRequest {
+            data: config_yaml.as_bytes().to_vec(),
+            mode: proto_mode as i32,
+            dry_run,
+            try_mode_timeout: None,
+        }));
+
+        let response = client.apply_configuration(request).await?;
+        let inner = response.into_inner();
+
+        let results: Vec<ApplyConfigResult> = inner
+            .messages
+            .into_iter()
+            .map(|msg| ApplyConfigResult {
+                node: msg.metadata.as_ref().map(|m| m.hostname.clone()).unwrap_or_default(),
+                mode_result: msg.mode_details,
+                warnings: msg.warnings,
+            })
+            .collect();
+
+        Ok(results)
+    }
+}
+
+// ==================== Configuration Types ====================
+
+/// Mode for applying configuration changes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyMode {
+    /// Reboot immediately after applying
+    Reboot,
+    /// Auto-detect if reboot is needed
+    Auto,
+    /// Apply without rebooting (may not apply all changes)
+    NoReboot,
+    /// Stage for next reboot
+    Staged,
+}
+
+/// Result of applying configuration
+#[derive(Debug, Clone)]
+pub struct ApplyConfigResult {
+    /// Node that was configured
+    pub node: String,
+    /// Details about the apply mode result
+    pub mode_result: String,
+    /// Any warnings from the apply
+    pub warnings: Vec<String>,
 }
 
 /// Version information for a node

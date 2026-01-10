@@ -457,6 +457,18 @@ impl Component for ClusterComponent {
                     Ok(None)
                 }
             }
+            KeyCode::Char('d') => {
+                // View diagnostics for current node
+                if let Some(node_name) = self.current_node_name() {
+                    let node_ip = self.node_ips.get(&node_name).cloned().unwrap_or(node_name.clone());
+                    let node_role = self.current_node_role();
+                    tracing::info!("Cluster: pressing d, node_name='{}', ip='{}', role='{}'", node_name, node_ip, node_role);
+                    Ok(Some(Action::ShowDiagnostics(node_name, node_ip, node_role)))
+                } else {
+                    tracing::warn!("Cluster: pressing d, but no node selected");
+                    Ok(None)
+                }
+            }
             _ => Ok(None),
         }
     }

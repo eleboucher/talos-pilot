@@ -101,6 +101,7 @@ impl DiagnosticsComponent {
 
         let mut context = DiagnosticContext::new();
         context.node_role = node_role.clone();
+        context.hostname = hostname.clone();
 
         Self {
             hostname,
@@ -524,18 +525,15 @@ impl DiagnosticsComponent {
                 Style::default().fg(Color::Yellow),
             )));
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                format!("  {}", command),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from("Then restart the Talos container:"));
-            lines.push(Line::from(Span::styled(
-                "  docker restart <container-name>",
-                Style::default().fg(Color::Cyan),
-            )));
+            // Display each line of the command
+            for cmd_line in command.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", cmd_line),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
             lines.push(Line::from(""));
         } else if let Some(preview) = &pending.preview {
             lines.push(Line::from("This will apply the following configuration:"));
@@ -655,10 +653,17 @@ impl Component for DiagnosticsComponent {
                                 if let FixAction::HostCommand { command, .. } =
                                     &pending.fix.action
                                 {
-                                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                        let _ = clipboard.set_text(command.clone());
-                                        self.copy_feedback_until = Some(Instant::now());
-                                    }
+                                    // Spawn a thread to copy to clipboard and keep it alive
+                                    // This prevents the "clipboard dropped quickly" warning
+                                    let cmd = command.clone();
+                                    std::thread::spawn(move || {
+                                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                            let _ = clipboard.set_text(cmd);
+                                            // Keep clipboard alive for a bit so clipboard managers can read
+                                            std::thread::sleep(std::time::Duration::from_millis(100));
+                                        }
+                                    });
+                                    self.copy_feedback_until = Some(Instant::now());
                                 }
                             }
                         } else {

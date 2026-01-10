@@ -48,10 +48,20 @@ async fn check_br_netfilter(
     } else {
         // Provide platform-specific fix
         let fix = if ctx.is_container {
+            // Generate combined command with modprobe and docker restart
+            let container_name = if ctx.hostname.is_empty() {
+                "<container-name>".to_string()
+            } else {
+                ctx.hostname.clone()
+            };
+            let combined_command = format!(
+                "sudo modprobe br_netfilter && \\\ndocker restart {}",
+                container_name
+            );
             DiagnosticFix {
                 description: "Load br_netfilter on Docker host".to_string(),
                 action: FixAction::HostCommand {
-                    command: "sudo modprobe br_netfilter".to_string(),
+                    command: combined_command,
                     description: "Load br_netfilter on Docker host".to_string(),
                 },
             }
@@ -112,10 +122,19 @@ async fn check_flannel_cni(
                 let (fix, message, details) = if !br_netfilter_ok {
                     // br_netfilter is the root cause
                     let fix = if ctx.is_container {
+                        let container_name = if ctx.hostname.is_empty() {
+                            "<container-name>".to_string()
+                        } else {
+                            ctx.hostname.clone()
+                        };
+                        let combined_command = format!(
+                            "sudo modprobe br_netfilter && \\\ndocker restart {}",
+                            container_name
+                        );
                         Some(DiagnosticFix {
                             description: "Load br_netfilter on Docker host".to_string(),
                             action: FixAction::HostCommand {
-                                command: "sudo modprobe br_netfilter".to_string(),
+                                command: combined_command,
                                 description: "Load br_netfilter on Docker host".to_string(),
                             },
                         })
@@ -132,11 +151,16 @@ async fn check_flannel_cni(
                     )
                 } else if ctx.is_container {
                     // In Docker, might need to restart container
+                    let container_name = if ctx.hostname.is_empty() {
+                        "<container-name>".to_string()
+                    } else {
+                        ctx.hostname.clone()
+                    };
                     (
                         Some(DiagnosticFix {
                             description: "Restart Talos container".to_string(),
                             action: FixAction::HostCommand {
-                                command: "docker restart <container-name>".to_string(),
+                                command: format!("docker restart {}", container_name),
                                 description: "Restart Talos container".to_string(),
                             },
                         }),

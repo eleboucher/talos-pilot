@@ -235,6 +235,8 @@ pub struct DiagnosticContext {
     pub cni_type: CniType,
     /// Node role (controlplane or worker)
     pub node_role: String,
+    /// Node hostname (used as container name in Docker)
+    pub hostname: String,
 }
 
 impl DiagnosticContext {
@@ -244,6 +246,7 @@ impl DiagnosticContext {
             is_container: false,
             cni_type: CniType::Unknown,
             node_role: String::new(),
+            hostname: String::new(),
         }
     }
 }

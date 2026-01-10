@@ -673,26 +673,57 @@ impl DiagnosticsComponent {
 
                     if cni_failed {
                         cni_ok = false;
-                        // If br_netfilter is missing, that's likely the root cause - offer the fix
-                        let fix = if br_netfilter_missing {
-                            Some(DiagnosticFix {
-                                description: "Add br_netfilter kernel module".to_string(),
-                                action: FixAction::AddKernelModule("br_netfilter".to_string()),
-                            })
+                        // Determine fix based on br_netfilter status and platform
+                        let (fix, details, message) = if br_netfilter_missing {
+                            // br_netfilter is missing - offer to add it
+                            if is_container {
+                                (
+                                    Some(DiagnosticFix {
+                                        description: "Load br_netfilter on Docker host".to_string(),
+                                        action: FixAction::HostCommand {
+                                            command: "sudo modprobe br_netfilter".to_string(),
+                                            description: "Load br_netfilter on Docker host".to_string(),
+                                        },
+                                    }),
+                                    "CNI plugin failed because br_netfilter kernel module is not loaded on the Docker host.",
+                                    "br_netfilter missing",
+                                )
+                            } else {
+                                (
+                                    Some(DiagnosticFix {
+                                        description: "Add br_netfilter kernel module".to_string(),
+                                        action: FixAction::AddKernelModule("br_netfilter".to_string()),
+                                    }),
+                                    "CNI plugin failed because br_netfilter kernel module is missing. Apply the fix to add the module and reboot the node.",
+                                    "br_netfilter missing",
+                                )
+                            }
+                        } else if is_container {
+                            // br_netfilter is OK but CNI still failing in Docker - suggest restart
+                            (
+                                Some(DiagnosticFix {
+                                    description: "Restart Talos container".to_string(),
+                                    action: FixAction::HostCommand {
+                                        command: "docker restart <container-name>".to_string(),
+                                        description: "Restart Talos container to apply kernel changes".to_string(),
+                                    },
+                                }),
+                                "CNI plugin failed. If you recently loaded br_netfilter, restart the Talos container to apply the changes.",
+                                "Restart container",
+                            )
                         } else {
-                            None
-                        };
-
-                        let details = if br_netfilter_missing {
-                            "CNI plugin failed because br_netfilter kernel module is missing. Apply the fix to add the module and reboot the node."
-                        } else {
-                            "CNI plugin failed to set up pod networking. Check the kernel modules and flannel pod logs."
+                            // Non-container with br_netfilter OK - unknown cause
+                            (
+                                None,
+                                "CNI plugin failed to set up pod networking. Check the flannel pod logs for more details.",
+                                "Network setup failed",
+                            )
                         };
 
                         kubernetes_checks.push(DiagnosticCheck::fail(
                             "cni",
                             "CNI (Flannel)",
-                            if br_netfilter_missing { "br_netfilter missing" } else { "Network setup failed" },
+                            message,
                             fix,
                         ).with_details(details));
                     } else {

@@ -275,6 +275,53 @@ impl CniInfo {
     }
 }
 
+/// Information about an unhealthy pod (from K8s API)
+#[derive(Debug, Clone)]
+pub struct UnhealthyPodInfo {
+    /// Pod name
+    pub name: String,
+    /// Pod namespace
+    pub namespace: String,
+    /// Container state (e.g., "CrashLoopBackOff", "ImagePullBackOff")
+    pub state: String,
+    /// Number of restarts
+    pub restart_count: i32,
+}
+
+/// Pod health information from K8s API
+#[derive(Debug, Clone, Default)]
+pub struct PodHealthInfo {
+    /// Pods in CrashLoopBackOff
+    pub crashing: Vec<UnhealthyPodInfo>,
+    /// Pods in ImagePullBackOff
+    pub image_pull_errors: Vec<UnhealthyPodInfo>,
+    /// Total pod count
+    pub total_pods: usize,
+}
+
+impl PodHealthInfo {
+    /// Check if there are any unhealthy pods
+    pub fn has_issues(&self) -> bool {
+        !self.crashing.is_empty() || !self.image_pull_errors.is_empty()
+    }
+
+    /// Get summary message
+    pub fn summary(&self) -> String {
+        if self.crashing.is_empty() && self.image_pull_errors.is_empty() {
+            "All pods healthy".to_string()
+        } else {
+            let mut parts = Vec::new();
+            if !self.crashing.is_empty() {
+                parts.push(format!("{} crashing", self.crashing.len()));
+            }
+            if !self.image_pull_errors.is_empty() {
+                parts.push(format!("{} image errors", self.image_pull_errors.len()));
+            }
+            parts.join(", ")
+        }
+    }
+}
+
 /// Context passed to diagnostic providers
 #[derive(Clone)]
 pub struct DiagnosticContext {
@@ -290,6 +337,10 @@ pub struct DiagnosticContext {
     pub hostname: String,
     /// CNI information from K8s API (if available)
     pub cni_info: Option<CniInfo>,
+    /// Pod health information from K8s API (if available)
+    pub pod_health: Option<PodHealthInfo>,
+    /// Number of CPU cores (for load threshold scaling)
+    pub cpu_count: usize,
 }
 
 impl DiagnosticContext {
@@ -301,6 +352,8 @@ impl DiagnosticContext {
             node_role: String::new(),
             hostname: String::new(),
             cni_info: None,
+            pod_health: None,
+            cpu_count: 1,
         }
     }
 }

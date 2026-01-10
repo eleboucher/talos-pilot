@@ -8,7 +8,7 @@ use talos_rs::TalosClient;
 /// Run all core system health checks
 pub async fn run_system_checks(
     client: &TalosClient,
-    _ctx: &DiagnosticContext,
+    ctx: &DiagnosticContext,
 ) -> Vec<DiagnosticCheck> {
     let mut checks = Vec::new();
 
@@ -40,14 +40,16 @@ pub async fn run_system_checks(
         }
     }
 
-    // CPU load check
+    // CPU load check - threshold scales by CPU count
     match client.load_avg().await {
         Ok(load_list) => {
             if let Some(load) = load_list.first() {
                 let msg = format!("{:.2} / {:.2} / {:.2}", load.load1, load.load5, load.load15);
-                // Simple heuristic: load > 4 is concerning (assumes multi-core)
-                if load.load1 > 4.0 {
-                    checks.push(DiagnosticCheck::warn("cpu_load", "CPU Load", &msg));
+                // Scale threshold by CPU count: warn if load > cpu_count * 1.5
+                let threshold = (ctx.cpu_count as f64) * 1.5;
+                if load.load1 > threshold {
+                    checks.push(DiagnosticCheck::warn("cpu_load", "CPU Load", &msg)
+                        .with_details(&format!("Load exceeds threshold ({:.1} for {} CPUs)", threshold, ctx.cpu_count)));
                 } else {
                     checks.push(DiagnosticCheck::pass("cpu_load", "CPU Load", &msg));
                 }
@@ -151,68 +153,88 @@ pub async fn run_kubernetes_checks(
         }
     }
 
-    // Generic pod health check from kubelet logs
+    // Pod health check - use K8s API if available, otherwise skip
     // Note: CNI-specific checks are delegated to CNI providers
-    match client.logs("kubelet", 100).await {
-        Ok(logs) => {
-            let log_lines: Vec<&str> = logs.lines().collect();
-            let recent_logs = if log_lines.len() > 20 {
-                log_lines[log_lines.len() - 20..].join("\n")
-            } else {
-                logs.clone()
-            };
+    if let Some(ref pod_health) = ctx.pod_health {
+        if pod_health.has_issues() {
+            let summary = pod_health.summary();
+            let mut details = String::new();
 
-            // Check for CrashLoopBackOff (generic issue)
-            let crashloop = recent_logs.contains("CrashLoopBackOff");
-
-            if crashloop {
-                checks.push(DiagnosticCheck::warn(
-                    "pods_crashing",
-                    "Pod Health",
-                    "CrashLoopBackOff detected",
-                ));
-            } else {
-                checks.push(DiagnosticCheck::pass(
-                    "pods_crashing",
-                    "Pod Health",
-                    "No issues detected",
-                ));
+            if !pod_health.crashing.is_empty() {
+                details.push_str("Crashing pods:\n");
+                for pod in &pod_health.crashing {
+                    details.push_str(&format!(
+                        "  {}/{} ({} restarts)\n",
+                        pod.namespace, pod.name, pod.restart_count
+                    ));
+                }
             }
+            if !pod_health.image_pull_errors.is_empty() {
+                if !details.is_empty() {
+                    details.push('\n');
+                }
+                details.push_str("Image pull errors:\n");
+                for pod in &pod_health.image_pull_errors {
+                    details.push_str(&format!("  {}/{}\n", pod.namespace, pod.name));
+                }
+            }
+
+            checks.push(
+                DiagnosticCheck::warn("pod_health", "Pod Health", &summary)
+                    .with_details(&details.trim_end()),
+            );
+        } else {
+            checks.push(DiagnosticCheck::pass(
+                "pod_health",
+                "Pod Health",
+                &format!("{} pods", pod_health.total_pods),
+            ));
         }
-        Err(_) => {
-            checks.push(DiagnosticCheck::unknown("pods_crashing", "Pod Health"));
-        }
+    } else {
+        // K8s API not available - show as unknown rather than false-positive from logs
+        checks.push(
+            DiagnosticCheck::unknown("pod_health", "Pod Health")
+                .with_details("K8s API unavailable - cannot check pod status"),
+        );
     }
 
     checks
 }
 
-/// Check if CNI is working (generic check)
+/// Check if CNI is working (generic check via file existence)
+///
+/// This checks for CNI-specific config files rather than parsing logs.
+/// The presence of these files indicates the CNI has initialized.
+///
 /// Returns (is_working, error_details)
 pub async fn check_cni_health(client: &TalosClient) -> (bool, Option<String>) {
-    match client.logs("kubelet", 100).await {
-        Ok(logs) => {
-            let log_lines: Vec<&str> = logs.lines().collect();
-            let recent_logs = if log_lines.len() > 20 {
-                log_lines[log_lines.len() - 20..].join("\n")
-            } else {
-                logs.clone()
-            };
+    // Check for Flannel subnet.env
+    if client.read_file("/run/flannel/subnet.env").await.is_ok() {
+        return (true, None);
+    }
 
-            // Check for CNI failures
-            let has_failure = recent_logs.contains("failed to setup network for sandbox")
-                || recent_logs.contains("network plugin is not ready");
+    // Check for Cilium CNI config
+    if client.read_file("/etc/cni/net.d/05-cilium.conflist").await.is_ok() {
+        return (true, None);
+    }
 
-            // Check for successes
-            let has_success = recent_logs.contains("successfully setup network")
-                || logs.contains("ADD command succeeded");
+    // Check for Calico CNI config
+    if client.read_file("/etc/cni/net.d/10-calico.conflist").await.is_ok() {
+        return (true, None);
+    }
 
-            if has_failure && !has_success {
-                (false, Some("CNI plugin failed to set up pod networking".to_string()))
-            } else {
-                (true, None)
+    // Check for any CNI config in /etc/cni/net.d/
+    // If we find any config file, CNI is likely working
+    match client.read_file("/etc/cni/net.d").await {
+        Ok(content) => {
+            // If the directory exists and has content, some CNI is configured
+            if !content.is_empty() {
+                return (true, None);
             }
         }
-        Err(e) => (false, Some(format!("Could not check CNI health: {}", e))),
+        Err(_) => {}
     }
+
+    // No CNI config files found
+    (false, Some("No CNI configuration files found".to_string()))
 }

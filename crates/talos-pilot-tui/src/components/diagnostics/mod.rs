@@ -357,11 +357,48 @@ impl DiagnosticsComponent {
             }
         }
 
+        // Get CPU count for load threshold scaling
+        if let Ok(cpu_info) = client.cpu_info().await {
+            if let Some(info) = cpu_info.first() {
+                self.context.cpu_count = info.cpu_count.max(1);
+                tracing::info!("Detected {} CPUs", self.context.cpu_count);
+            }
+        }
+
         // Detect CNI type (tries K8s API, falls back to logs)
         let (cni_type, cni_info) = cni::detect_cni(client).await;
         self.context.cni_type = cni_type;
         self.context.cni_info = cni_info;
         tracing::info!("Detected CNI: {:?}", self.context.cni_type);
+
+        // Get pod health from K8s API (if available)
+        if let Ok(k8s_client) = k8s::create_k8s_client(client).await {
+            match k8s::check_pod_health(&k8s_client).await {
+                Ok(health) => {
+                    // Convert k8s::PodHealthInfo to types::PodHealthInfo
+                    let pod_health = PodHealthInfo {
+                        crashing: health.crashing.iter().map(|p| UnhealthyPodInfo {
+                            name: p.name.clone(),
+                            namespace: p.namespace.clone(),
+                            state: p.state.clone(),
+                            restart_count: p.restart_count,
+                        }).collect(),
+                        image_pull_errors: health.image_pull_errors.iter().map(|p| UnhealthyPodInfo {
+                            name: p.name.clone(),
+                            namespace: p.namespace.clone(),
+                            state: p.state.clone(),
+                            restart_count: p.restart_count,
+                        }).collect(),
+                        total_pods: health.total_pods,
+                    };
+                    self.context.pod_health = Some(pod_health);
+                    tracing::info!("Pod health check complete: {} pods", health.total_pods);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to check pod health via K8s API: {}", e);
+                }
+            }
+        }
 
         let result = tokio::time::timeout(timeout, async {
             // Run core checks

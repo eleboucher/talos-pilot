@@ -161,3 +161,137 @@ pub fn cni_pod_health_summary(info: &CniInfo) -> String {
         format!("{}/{} pods healthy", healthy, total)
     }
 }
+
+/// Information about an unhealthy pod
+#[derive(Debug, Clone)]
+pub struct UnhealthyPodInfo {
+    /// Pod name
+    pub name: String,
+    /// Pod namespace
+    pub namespace: String,
+    /// Container state (e.g., "CrashLoopBackOff", "ImagePullBackOff")
+    pub state: String,
+    /// Number of restarts
+    pub restart_count: i32,
+    /// Last termination reason (if any)
+    pub last_reason: Option<String>,
+}
+
+/// Pod health summary from K8s API
+#[derive(Debug, Clone, Default)]
+pub struct PodHealthInfo {
+    /// Pods in CrashLoopBackOff
+    pub crashing: Vec<UnhealthyPodInfo>,
+    /// Pods in ImagePullBackOff
+    pub image_pull_errors: Vec<UnhealthyPodInfo>,
+    /// Pods stuck in Pending
+    pub pending: Vec<UnhealthyPodInfo>,
+    /// Total pod count
+    pub total_pods: usize,
+}
+
+impl PodHealthInfo {
+    /// Check if there are any unhealthy pods
+    pub fn has_issues(&self) -> bool {
+        !self.crashing.is_empty() || !self.image_pull_errors.is_empty()
+    }
+
+    /// Get summary message
+    pub fn summary(&self) -> String {
+        if self.crashing.is_empty() && self.image_pull_errors.is_empty() && self.pending.is_empty() {
+            "All pods healthy".to_string()
+        } else {
+            let mut parts = Vec::new();
+            if !self.crashing.is_empty() {
+                parts.push(format!("{} crashing", self.crashing.len()));
+            }
+            if !self.image_pull_errors.is_empty() {
+                parts.push(format!("{} image errors", self.image_pull_errors.len()));
+            }
+            if !self.pending.is_empty() {
+                parts.push(format!("{} pending", self.pending.len()));
+            }
+            parts.join(", ")
+        }
+    }
+}
+
+/// Check pod health across all namespaces using K8s API
+///
+/// This is the authoritative way to check for crashing pods - no log parsing!
+pub async fn check_pod_health(client: &Client) -> Result<PodHealthInfo, K8sError> {
+    let pods: Api<Pod> = Api::all(client.clone());
+
+    let pod_list = pods
+        .list(&ListParams::default())
+        .await
+        .map_err(|e| K8sError::ApiError(e.to_string()))?;
+
+    let mut info = PodHealthInfo {
+        total_pods: pod_list.items.len(),
+        ..Default::default()
+    };
+
+    for pod in pod_list.items {
+        let name = pod.metadata.name.clone().unwrap_or_default();
+        let namespace = pod.metadata.namespace.clone().unwrap_or_default();
+        let status = pod.status.as_ref();
+
+        // Check container statuses for waiting states
+        if let Some(container_statuses) = status.and_then(|s| s.container_statuses.as_ref()) {
+            for cs in container_statuses {
+                if let Some(waiting) = cs.state.as_ref().and_then(|s| s.waiting.as_ref()) {
+                    let reason = waiting.reason.clone().unwrap_or_default();
+                    let restart_count = cs.restart_count;
+
+                    // Get last termination reason if available
+                    let last_reason = cs
+                        .last_state
+                        .as_ref()
+                        .and_then(|s| s.terminated.as_ref())
+                        .and_then(|t| t.reason.clone());
+
+                    let pod_info = UnhealthyPodInfo {
+                        name: name.clone(),
+                        namespace: namespace.clone(),
+                        state: reason.clone(),
+                        restart_count,
+                        last_reason,
+                    };
+
+                    match reason.as_str() {
+                        "CrashLoopBackOff" => info.crashing.push(pod_info),
+                        "ImagePullBackOff" | "ErrImagePull" => info.image_pull_errors.push(pod_info),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Check for stuck Pending pods (no container statuses yet)
+        let phase = status.and_then(|s| s.phase.clone()).unwrap_or_default();
+        if phase == "Pending" {
+            // Check if it's been pending for a while (has conditions but no containers)
+            let has_conditions = status
+                .and_then(|s| s.conditions.as_ref())
+                .map(|c| !c.is_empty())
+                .unwrap_or(false);
+            let no_containers = status
+                .and_then(|s| s.container_statuses.as_ref())
+                .map(|c| c.is_empty())
+                .unwrap_or(true);
+
+            if has_conditions && no_containers {
+                info.pending.push(UnhealthyPodInfo {
+                    name,
+                    namespace,
+                    state: "Pending".to_string(),
+                    restart_count: 0,
+                    last_reason: None,
+                });
+            }
+        }
+    }
+
+    Ok(info)
+}

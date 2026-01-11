@@ -139,6 +139,8 @@ pub struct ClusterComponent {
     auto_refresh: bool,
     /// Last auto-refresh time for selected node
     last_auto_refresh: Option<std::time::Instant>,
+    /// Whether we've attempted to fetch etcd members (to detect not-bootstrapped state)
+    etcd_fetch_attempted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -182,6 +184,7 @@ impl ClusterComponent {
             selected_menu_item: 0,
             auto_refresh: true,
             last_auto_refresh: None,
+            etcd_fetch_attempted: false,
         }
     }
 
@@ -232,8 +235,11 @@ impl ClusterComponent {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to fetch etcd members: {}", e);
+                    // Clear members to indicate not bootstrapped or unreachable
+                    self.etcd_members.clear();
                 }
             }
+            self.etcd_fetch_attempted = true;
 
             // If we have discovered node IPs, use them to get proper data with hostnames
             // Otherwise fall back to the default (which may have empty hostnames)
@@ -864,6 +870,13 @@ impl ClusterComponent {
                 Span::styled(format!("{}/{} ", etcd.healthy, etcd.total), Style::default().fg(color)),
                 Span::styled(indicator, Style::default().fg(color)),
             ]
+        } else if self.etcd_fetch_attempted && self.etcd_members.is_empty() {
+            // Cluster is not bootstrapped (we tried to fetch etcd but got nothing)
+            vec![
+                Span::raw("   "),
+                Span::styled("Not Bootstrapped", Style::default().fg(Color::Yellow)),
+                Span::styled(" ○", Style::default().fg(Color::Yellow)),
+            ]
         } else {
             vec![]
         };
@@ -1045,6 +1058,51 @@ impl ClusterComponent {
         } else {
             Color::DarkGray
         };
+
+        // Show bootstrap guidance if cluster is not bootstrapped
+        if self.etcd_fetch_attempted && self.etcd_members.is_empty() {
+            let block = Block::default()
+                .title(" Bootstrap Required ")
+                .title_style(Style::default().fg(Color::Yellow))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color));
+
+            // Get control plane IP from talosconfig endpoints
+            let cp_ip = talos_rs::TalosConfig::load_default()
+                .ok()
+                .and_then(|config| {
+                    config.current_context()
+                        .and_then(|ctx| ctx.endpoints.first())
+                        .map(|e| e.split(':').next().unwrap_or(e).to_string())
+                })
+                .unwrap_or_else(|| "<control-plane-ip>".to_string());
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Cluster not yet bootstrapped.", Style::default().fg(Color::Yellow)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  To bootstrap, run:", Style::default().dim()),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(format!("    talosctl bootstrap -n {}", cp_ip), Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  This initializes etcd and starts", Style::default().dim()),
+                ]),
+                Line::from(vec![
+                    Span::styled("  the Kubernetes control plane.", Style::default().dim()),
+                ]),
+            ];
+
+            let msg = Paragraph::new(lines).block(block);
+            frame.render_widget(msg, area);
+            return;
+        }
 
         if self.versions.is_empty() {
             let block = Block::default()

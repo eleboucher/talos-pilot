@@ -5,8 +5,10 @@
 //! 2. Running CNI-specific diagnostic checks
 //! 3. Providing CNI-specific fixes
 
+mod cilium;
 mod flannel;
 
+pub use cilium::detect_ebpf_mode;
 pub use flannel::run_flannel_checks;
 
 use super::k8s;
@@ -40,6 +42,7 @@ pub async fn detect_cni_with_client(
                             .iter()
                             .map(|p| CniPodInfo {
                                 name: p.name.clone(),
+                                node_name: p.node_name.clone(),
                                 phase: p.phase.clone(),
                                 ready: p.ready,
                                 restart_count: p.restart_count,
@@ -96,10 +99,11 @@ async fn detect_cni_from_files(client: &TalosClient) -> CniType {
 pub async fn run_cni_checks(
     client: &TalosClient,
     ctx: &DiagnosticContext,
+    k8s_client: Option<&Client>,
 ) -> Vec<DiagnosticCheck> {
     match ctx.cni_type {
         CniType::Flannel => flannel::run_flannel_checks(client, ctx).await,
-        CniType::Cilium => run_cilium_checks(client, ctx).await,
+        CniType::Cilium => cilium::run_cilium_checks(ctx, k8s_client).await,
         CniType::Calico => run_calico_checks(client, ctx).await,
         CniType::Unknown | CniType::None => run_generic_cni_checks(client, ctx).await,
     }
@@ -123,28 +127,6 @@ async fn run_generic_cni_checks(
                 .with_details(&error.unwrap_or_else(|| "Unknown error".to_string())),
         );
     }
-
-    checks
-}
-
-/// Cilium-specific checks
-async fn run_cilium_checks(
-    _client: &TalosClient,
-    ctx: &DiagnosticContext,
-) -> Vec<DiagnosticCheck> {
-    let mut checks = Vec::new();
-
-    // Check Cilium pod health if we have K8s API info
-    if let Some(ref cni_info) = ctx.cni_info {
-        checks.push(check_cni_pods("Cilium Pods", cni_info));
-    }
-
-    // Note: Cilium uses eBPF, so br_netfilter is NOT required
-    checks.push(DiagnosticCheck::pass(
-        "cni",
-        "CNI (Cilium)",
-        if ctx.cni_info.is_some() { "OK" } else { "Detected" },
-    ));
 
     checks
 }

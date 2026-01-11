@@ -229,6 +229,8 @@ impl CniType {
 pub struct CniPodInfo {
     /// Pod name
     pub name: String,
+    /// Node the pod is running on
+    pub node_name: Option<String>,
     /// Pod phase (Running, Pending, etc.)
     pub phase: String,
     /// Whether pod is ready
@@ -335,6 +337,8 @@ pub struct DiagnosticContext {
     pub node_role: String,
     /// Node hostname (used as container name in Docker)
     pub hostname: String,
+    /// Node endpoint (IP address for talosctl commands)
+    pub node_endpoint: Option<String>,
     /// CNI information from K8s API (if available)
     pub cni_info: Option<CniInfo>,
     /// Pod health information from K8s API (if available)
@@ -353,6 +357,7 @@ impl DiagnosticContext {
             cni_type: CniType::Unknown,
             node_role: String::new(),
             hostname: String::new(),
+            node_endpoint: None,
             cni_info: None,
             pod_health: None,
             cpu_count: 1,

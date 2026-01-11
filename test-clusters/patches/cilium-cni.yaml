@@ -1,0 +1,6 @@
+# Cilium CNI preparation
+# Disables default Flannel CNI so Cilium can be installed
+cluster:
+  network:
+    cni:
+      name: none

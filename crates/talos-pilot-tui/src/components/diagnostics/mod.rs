@@ -115,6 +115,7 @@ impl DiagnosticsComponent {
         let mut context = DiagnosticContext::new();
         context.node_role = node_role.clone();
         context.hostname = hostname.clone();
+        context.node_endpoint = Some(address.clone());
 
         Self {
             hostname,
@@ -480,7 +481,7 @@ impl DiagnosticsComponent {
             system_checks.extend(cert_checks);
 
             // Run CNI-specific checks
-            let cni_checks = cni::run_cni_checks(client, &self.context).await;
+            let cni_checks = cni::run_cni_checks(client, &self.context, k8s_client.as_ref()).await;
 
             // Run addon-specific checks
             let addon_checks = addons::run_addon_checks(
@@ -949,8 +950,8 @@ impl Component for DiagnosticsComponent {
             };
 
             let content_chunks = Layout::vertical([
-                Constraint::Length(5),  // System Health
-                Constraint::Length(5),  // Kubernetes Components
+                Constraint::Length(7),  // System Health (Memory, CPU, 3 certs = 5 items + 2 border)
+                Constraint::Length(4),  // Kubernetes Components (etcd, pod_health = 2 items + 2 border)
                 Constraint::Length(5),  // CNI
                 Constraint::Fill(1),    // Services
                 addons_height,          // Addons (if any)

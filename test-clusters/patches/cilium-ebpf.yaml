@@ -1,0 +1,8 @@
+# Cilium eBPF mode (kube-proxy replacement)
+# Disables kube-proxy since Cilium handles it via eBPF
+cluster:
+  network:
+    cni:
+      name: none
+  proxy:
+    disabled: true

@@ -1,0 +1,8 @@
+# Hubble observability (applied via Helm, not machine config)
+# This file documents the Helm values used for Hubble
+# Not a Talos patch - just reference documentation
+#
+# helm install cilium cilium/cilium \
+#   --set hubble.enabled=true \
+#   --set hubble.relay.enabled=true \
+#   --set hubble.ui.enabled=true

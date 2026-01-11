@@ -1,0 +1,6 @@
+# KubeSpan - Talos built-in WireGuard mesh networking
+# Enables encrypted node-to-node communication
+machine:
+  network:
+    kubespan:
+      enabled: true

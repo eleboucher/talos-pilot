@@ -146,9 +146,23 @@ pub fn get_address_status(node: &str) -> Result<Vec<AddressStatus>, TalosError> 
 
 /// Check if KubeSpan is enabled for a node
 ///
-/// Executes: talosctl get kubespanidentity --nodes <node> -o yaml
+/// Executes: talosctl get kubespanconfig --nodes <node> -o yaml
+/// Returns true only if the command succeeds AND shows enabled: true
+///
+/// Note: We check kubespanconfig instead of kubespanidentity because
+/// kubespanconfig exists on all nodes where KubeSpan is configured,
+/// while kubespanidentity may be empty on single-node clusters.
 pub fn is_kubespan_enabled(node: &str) -> bool {
-    exec_talosctl(&["get", "kubespanidentity", "--nodes", node, "-o", "yaml"]).is_ok()
+    match exec_talosctl(&["get", "kubespanconfig", "--nodes", node, "-o", "yaml"]) {
+        Ok(output) => {
+            // Check if output contains KubeSpanConfig with enabled: true
+            let trimmed = output.trim();
+            !trimmed.is_empty()
+                && trimmed.contains("KubeSpanConfig")
+                && trimmed.contains("enabled: true")
+        }
+        Err(_) => false,
+    }
 }
 
 /// Parse volume status YAML output from talosctl

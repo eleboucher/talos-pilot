@@ -57,6 +57,8 @@ pub struct CniInfo {
 pub struct CniPodInfo {
     /// Pod name
     pub name: String,
+    /// Node the pod is running on
+    pub node_name: Option<String>,
     /// Pod phase (Running, Pending, etc.)
     pub phase: String,
     /// Whether pod is ready
@@ -120,8 +122,12 @@ pub async fn detect_cni_from_k8s(client: &Client) -> Result<CniInfo, K8sError> {
                 })
                 .unwrap_or(0);
 
+            // Get node name from pod spec
+            let node_name = pod.spec.as_ref().and_then(|s| s.node_name.clone());
+
             cni_info.pods.push(CniPodInfo {
                 name,
+                node_name,
                 phase,
                 ready,
                 restart_count,

@@ -14,7 +14,7 @@ use ratatui::{
     Frame,
 };
 use std::time::Instant;
-use talos_rs::{NodeTimeInfo, TalosClient, VersionInfo};
+use talos_rs::{get_discovery_members, DiscoveryMember, NodeTimeInfo, TalosClient, VersionInfo};
 
 /// Auto-refresh interval in seconds
 const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
@@ -99,6 +99,9 @@ pub struct LifecycleComponent {
 
     /// Client for API calls
     client: Option<TalosClient>,
+
+    /// Discovery members (from talosctl get members)
+    discovery_members: Vec<DiscoveryMember>,
 }
 
 impl Default for LifecycleComponent {
@@ -125,6 +128,7 @@ impl LifecycleComponent {
             last_refresh: None,
             auto_refresh: true,
             client: None,
+            discovery_members: Vec::new(),
         }
     }
 
@@ -182,20 +186,25 @@ impl LifecycleComponent {
             }
         }
 
-        // Get config hash via talosctl for first node
-        let config_hash = self.versions.first()
-            .map(|v| v.node.split(':').next().unwrap_or(&v.node).to_string())
-            .and_then(|node| {
-                match talos_rs::get_machine_config(&node) {
-                    Ok(config) => Some(config.version),
-                    Err(e) => {
-                        tracing::debug!("Failed to get machine config: {}", e);
-                        None
-                    }
+        // Get discovery members via talosctl for first node
+        let first_node = self.versions.first()
+            .map(|v| v.node.split(':').next().unwrap_or(&v.node).to_string());
+
+        // Fetch discovery members
+        if let Some(node) = first_node.clone() {
+            match get_discovery_members(&node) {
+                Ok(members) => {
+                    self.discovery_members = members;
                 }
-            });
+                Err(e) => {
+                    tracing::debug!("Failed to get discovery members: {}", e);
+                    self.discovery_members.clear();
+                }
+            }
+        }
 
         // Build node statuses combining version and time info
+        // Fetch config hash for each node individually for drift detection
         self.node_statuses = self.versions
             .iter()
             .map(|v| {
@@ -204,10 +213,17 @@ impl LifecycleComponent {
                     .find(|t| t.node == v.node)
                     .map(|t| t.synced);
 
+                // Get config hash for this specific node
+                let node_addr = v.node.split(':').next().unwrap_or(&v.node);
+                let node_config_hash = match talos_rs::get_machine_config(node_addr) {
+                    Ok(config) => Some(config.version),
+                    Err(_) => None,
+                };
+
                 NodeStatus {
                     hostname: v.node.clone(),
                     version: v.version.clone(),
-                    config_hash: config_hash.clone(),
+                    config_hash: node_config_hash,
                     time_synced,
                     ready: true,       // Assume ready for now
                     platform: v.platform.clone(),
@@ -247,14 +263,51 @@ impl LifecycleComponent {
             });
         }
 
-        // Check for config hash availability
-        let has_config_hash = self.node_statuses.iter().any(|n| n.config_hash.is_some());
-        if has_config_hash {
-            // Show config version
-            if let Some(hash) = self.node_statuses.first().and_then(|n| n.config_hash.as_ref()) {
+        // Check for config drift (compare hashes across nodes)
+        let config_hashes: Vec<(&str, Option<&str>)> = self.node_statuses.iter()
+            .map(|n| (n.hostname.as_str(), n.config_hash.as_deref()))
+            .collect();
+
+        let unique_hashes: std::collections::HashSet<_> = config_hashes.iter()
+            .filter_map(|(_, h)| *h)
+            .collect();
+
+        if unique_hashes.len() > 1 {
+            // Config drift detected - list nodes with different hashes
+            let drift_details: Vec<String> = config_hashes.iter()
+                .filter_map(|(hostname, hash)| {
+                    hash.map(|h| format!("{}:{}", hostname.split(':').next().unwrap_or(hostname), h))
+                })
+                .collect();
+            self.alerts.push(Alert {
+                severity: AlertSeverity::Warning,
+                message: format!("Config drift detected: {}", drift_details.join(", ")),
+            });
+        } else if let Some(hash) = unique_hashes.iter().next() {
+            // All nodes have same config hash
+            self.alerts.push(Alert {
+                severity: AlertSeverity::Info,
+                message: format!("Config version: {} (all nodes in sync)", hash),
+            });
+        }
+
+        // Check discovery service health
+        if !self.discovery_members.is_empty() {
+            let expected_nodes = self.node_statuses.len();
+            let discovered_nodes = self.discovery_members.len();
+
+            if discovered_nodes < expected_nodes {
+                self.alerts.push(Alert {
+                    severity: AlertSeverity::Warning,
+                    message: format!(
+                        "Discovery: {}/{} nodes visible (some nodes may not be discoverable)",
+                        discovered_nodes, expected_nodes
+                    ),
+                });
+            } else {
                 self.alerts.push(Alert {
                     severity: AlertSeverity::Info,
-                    message: format!("Config version: {}", hash),
+                    message: format!("Discovery: {}/{} nodes healthy", discovered_nodes, expected_nodes),
                 });
             }
         }

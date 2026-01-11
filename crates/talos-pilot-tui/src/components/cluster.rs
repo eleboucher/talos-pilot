@@ -13,8 +13,8 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use talos_rs::{
-    EtcdMemberInfo, MemInfo, NodeCpuInfo, NodeLoadAvg, NodeMemory, NodeServices, ServiceInfo,
-    TalosClient, VersionInfo,
+    get_address_status, EtcdMemberInfo, MemInfo, NodeCpuInfo, NodeLoadAvg, NodeMemory, NodeServices,
+    ServiceInfo, TalosClient, VersionInfo,
 };
 
 /// Simple etcd status for header display
@@ -26,6 +26,15 @@ struct EtcdSummary {
     total: usize,
     /// Whether etcd has quorum
     has_quorum: bool,
+}
+
+/// VIP (Virtual IP) info
+#[derive(Debug, Clone)]
+struct VipInfo {
+    /// The VIP address
+    address: String,
+    /// Node currently holding the VIP
+    holder: String,
 }
 
 /// Cluster component showing overview with node list
@@ -62,6 +71,8 @@ pub struct ClusterComponent {
     error: Option<String>,
     /// Last refresh time
     last_refresh: Option<std::time::Instant>,
+    /// VIP info (if configured)
+    vip_info: Option<VipInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -100,6 +111,7 @@ impl ClusterComponent {
             list_state,
             error: None,
             last_refresh: None,
+            vip_info: None,
         }
     }
 
@@ -271,6 +283,41 @@ impl ClusterComponent {
                 }
                 Err(_) => {
                     // Don't overwrite existing summary on error
+                }
+            }
+
+            // Check for VIP (Virtual IP) - look for addresses with vip flag
+            self.vip_info = None;
+            for member in &self.etcd_members {
+                if let Some(ip) = member.ip_address() {
+                    // Use talosctl to get address status
+                    match get_address_status(&ip) {
+                        Ok(addresses) => {
+                            // Look for addresses with "vip" flag or on a shared interface
+                            for addr in addresses {
+                                if addr.flags.iter().any(|f| f.to_lowercase().contains("vip"))
+                                    || addr.link_name.contains("vip")
+                                {
+                                    let holder = if !member.hostname.is_empty() {
+                                        member.hostname.clone()
+                                    } else {
+                                        ip.clone()
+                                    };
+                                    self.vip_info = Some(VipInfo {
+                                        address: addr.address.clone(),
+                                        holder,
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Silently ignore VIP detection errors
+                        }
+                    }
+                    if self.vip_info.is_some() {
+                        break;
+                    }
                 }
             }
 
@@ -524,6 +571,17 @@ impl Component for ClusterComponent {
             vec![]
         };
 
+        // Build VIP status indicator for header
+        let vip_spans = if let Some(vip) = &self.vip_info {
+            vec![
+                Span::raw("    VIP ").dim(),
+                Span::styled("●", Style::default().fg(Color::Cyan)),
+                Span::raw(format!(" {} → {}", vip.address, vip.holder)).dim(),
+            ]
+        } else {
+            vec![]
+        };
+
         let mut header_spans = vec![
             Span::raw(" talos-pilot ").bold().fg(Color::Cyan),
             status_indicator,
@@ -536,6 +594,7 @@ impl Component for ClusterComponent {
             .dim(),
         ];
         header_spans.extend(etcd_spans);
+        header_spans.extend(vip_spans);
 
         let header = Paragraph::new(Line::from(header_spans))
         .block(

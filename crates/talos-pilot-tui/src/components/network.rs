@@ -16,8 +16,8 @@ use ratatui::{
 use std::collections::HashMap;
 use std::time::Instant;
 use talos_rs::{
-    ConnectionCounts, ConnectionInfo, ConnectionState, NetDevRate, NetDevStats, NetstatFilter,
-    ServiceInfo, TalosClient,
+    get_kubespan_peers, is_kubespan_enabled, ConnectionCounts, ConnectionInfo, ConnectionState,
+    KubeSpanPeerStatus, NetDevRate, NetDevStats, NetstatFilter, ServiceInfo, TalosClient,
 };
 
 /// Well-known Talos/Kubernetes service ports
@@ -260,6 +260,15 @@ pub struct NetworkStatsComponent {
 
     /// Client for API calls
     client: Option<TalosClient>,
+
+    /// KubeSpan peer status data
+    kubespan_peers: Vec<KubeSpanPeerStatus>,
+    /// KubeSpan enabled status
+    kubespan_enabled: Option<bool>,
+    /// Selected KubeSpan peer index
+    kubespan_selected: usize,
+    /// KubeSpan table state
+    kubespan_table_state: TableState,
 }
 
 impl Default for NetworkStatsComponent {
@@ -315,6 +324,14 @@ impl NetworkStatsComponent {
             file_viewer: None,
             capture: CaptureData::default(),
             client: None,
+            kubespan_peers: Vec::new(),
+            kubespan_enabled: None,
+            kubespan_selected: 0,
+            kubespan_table_state: {
+                let mut state = TableState::default();
+                state.select(Some(0));
+                state
+            },
         }
     }
 
@@ -414,6 +431,9 @@ impl NetworkStatsComponent {
         // Update service health based on connection data
         self.update_service_health();
 
+        // Fetch KubeSpan data via talosctl (runs synchronously in blocking task)
+        self.refresh_kubespan_data().await;
+
         // Reset selection if needed
         if !self.devices.is_empty() && self.selected >= self.devices.len() {
             self.selected = 0;
@@ -425,6 +445,43 @@ impl NetworkStatsComponent {
         self.last_refresh = Some(Instant::now());
 
         Ok(())
+    }
+
+    /// Refresh KubeSpan peer data via talosctl
+    async fn refresh_kubespan_data(&mut self) {
+        let node = self.address.clone();
+
+        // Run talosctl commands in a blocking task
+        let result = tokio::task::spawn_blocking(move || {
+            // First check if KubeSpan is enabled
+            let enabled = is_kubespan_enabled(&node);
+            if !enabled {
+                return (Some(false), Vec::new());
+            }
+
+            // Fetch peer status
+            match get_kubespan_peers(&node) {
+                Ok(peers) => (Some(true), peers),
+                Err(_) => (Some(true), Vec::new()), // Enabled but no peers or error
+            }
+        })
+        .await;
+
+        match result {
+            Ok((enabled, peers)) => {
+                self.kubespan_enabled = enabled;
+                self.kubespan_peers = peers;
+
+                // Reset selection if needed
+                if !self.kubespan_peers.is_empty() && self.kubespan_selected >= self.kubespan_peers.len() {
+                    self.kubespan_selected = 0;
+                }
+                self.kubespan_table_state.select(Some(self.kubespan_selected));
+            }
+            Err(_) => {
+                // Task panicked, leave data as-is
+            }
+        }
     }
 
     /// Update connections and calculate counts
@@ -1679,84 +1736,275 @@ impl NetworkStatsComponent {
         ]);
         frame.render_widget(Paragraph::new(tabs), chunks[0]);
 
-        // Content - placeholder until COSI API is available
+        // Check if KubeSpan is enabled
+        match self.kubespan_enabled {
+            Some(false) => {
+                // KubeSpan not enabled
+                self.draw_kubespan_disabled(frame, chunks[1]);
+            }
+            Some(true) if self.kubespan_peers.is_empty() => {
+                // Enabled but no peers
+                self.draw_kubespan_no_peers(frame, chunks[1]);
+            }
+            Some(true) => {
+                // Draw peer table and detail
+                self.draw_kubespan_peers(frame, chunks[1]);
+            }
+            None => {
+                // Loading/checking status
+                self.draw_kubespan_loading(frame, chunks[1]);
+            }
+        }
+
+        // Footer
+        let footer = Line::from(vec![
+            Span::styled(" Tab", Style::default().fg(Color::Cyan)),
+            Span::raw(" cycle views "),
+            Span::styled("j/k", Style::default().fg(Color::Cyan)),
+            Span::raw(" navigate "),
+            Span::styled("r", Style::default().fg(Color::Cyan)),
+            Span::raw(" refresh "),
+            Span::styled("q", Style::default().fg(Color::Cyan)),
+            Span::raw(" back"),
+        ]);
+        frame.render_widget(Paragraph::new(footer), chunks[2]);
+    }
+
+    /// Draw KubeSpan disabled message
+    fn draw_kubespan_disabled(&self, frame: &mut Frame, area: Rect) {
         let content_chunks = Layout::vertical([
-            Constraint::Length(3), // Header
+            Constraint::Length(2), // Header
             Constraint::Min(5),    // Info section
         ])
-        .split(chunks[1]);
+        .split(area);
 
-        // Header
         let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
         frame.render_widget(header, content_chunks[0]);
 
-        // Info section - explain status and how to check manually
         let info_lines = vec![
             Line::from(""),
             Line::from(vec![
-                Span::styled("  KubeSpan Status", Style::default().fg(Color::Yellow)),
+                Span::styled("  KubeSpan Status: ", Style::default().fg(Color::Yellow)),
+                Span::styled("Not Enabled", Style::default().fg(Color::Gray)),
             ]),
             Line::from(""),
             Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled("Note: ", Style::default().fg(Color::DarkGray)),
-                Span::raw("KubeSpan peer data requires COSI Resource API"),
-            ]),
-            Line::from(vec![
-                Span::raw("        (scheduled for talos-rs extension)"),
+                Span::raw("  KubeSpan provides encrypted WireGuard tunnels between cluster nodes."),
             ]),
             Line::from(""),
             Line::from(vec![
-                Span::styled("  To check KubeSpan status manually:", Style::default().fg(Color::Cyan)),
+                Span::styled("  To enable KubeSpan:", Style::default().fg(Color::Cyan)),
             ]),
             Line::from(""),
             Line::from(vec![
-                Span::styled("    talosctl get kubespanpeerstatus", Style::default().fg(Color::White)),
+                Span::styled("    machine:", Style::default().fg(Color::White)),
             ]),
             Line::from(vec![
-                Span::styled("    talosctl get kubespanendpoint", Style::default().fg(Color::White)),
+                Span::styled("      network:", Style::default().fg(Color::White)),
             ]),
             Line::from(vec![
-                Span::styled("    talosctl get kubespanlinkstatus", Style::default().fg(Color::White)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  Expected Features:", Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("    • ", Style::default().fg(Color::DarkGray)),
-                Span::raw("Peer connectivity status (up/down)"),
+                Span::styled("        kubespan:", Style::default().fg(Color::White)),
             ]),
             Line::from(vec![
-                Span::styled("    • ", Style::default().fg(Color::DarkGray)),
-                Span::raw("Endpoint discovery (direct/relay)"),
-            ]),
-            Line::from(vec![
-                Span::styled("    • ", Style::default().fg(Color::DarkGray)),
-                Span::raw("Link quality metrics (latency, jitter)"),
-            ]),
-            Line::from(vec![
-                Span::styled("    • ", Style::default().fg(Color::DarkGray)),
-                Span::raw("WireGuard handshake state"),
+                Span::styled("          enabled: true", Style::default().fg(Color::Green)),
             ]),
         ];
 
         let info = Paragraph::new(info_lines)
             .block(Block::default().borders(Borders::NONE));
         frame.render_widget(info, content_chunks[1]);
+    }
 
-        // Footer
-        let footer = Line::from(vec![
-            Span::styled(" Tab", Style::default().fg(Color::Cyan)),
-            Span::raw(" cycle views "),
-            Span::styled("q", Style::default().fg(Color::Cyan)),
-            Span::raw(" back "),
-            Span::styled("r", Style::default().fg(Color::Cyan)),
-            Span::raw(" refresh"),
+    /// Draw KubeSpan no peers message
+    fn draw_kubespan_no_peers(&self, frame: &mut Frame, area: Rect) {
+        let content_chunks = Layout::vertical([
+            Constraint::Length(2), // Header
+            Constraint::Min(5),    // Info section
+        ])
+        .split(area);
+
+        let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        frame.render_widget(header, content_chunks[0]);
+
+        let info_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  KubeSpan Status: ", Style::default().fg(Color::Yellow)),
+                Span::styled("Enabled", Style::default().fg(Color::Green)),
+                Span::raw(" │ "),
+                Span::styled("No peers connected", Style::default().fg(Color::Gray)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  Waiting for other nodes to establish KubeSpan connections."),
+            ]),
+        ];
+
+        let info = Paragraph::new(info_lines)
+            .block(Block::default().borders(Borders::NONE));
+        frame.render_widget(info, content_chunks[1]);
+    }
+
+    /// Draw KubeSpan loading message
+    fn draw_kubespan_loading(&self, frame: &mut Frame, area: Rect) {
+        let content_chunks = Layout::vertical([
+            Constraint::Length(2), // Header
+            Constraint::Min(5),    // Info section
+        ])
+        .split(area);
+
+        let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        frame.render_widget(header, content_chunks[0]);
+
+        let info_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Checking KubeSpan status...", Style::default().fg(Color::Yellow)),
+            ]),
+        ];
+
+        let info = Paragraph::new(info_lines)
+            .block(Block::default().borders(Borders::NONE));
+        frame.render_widget(info, content_chunks[1]);
+    }
+
+    /// Draw KubeSpan peers table and detail
+    fn draw_kubespan_peers(&mut self, frame: &mut Frame, area: Rect) {
+        let content_chunks = Layout::vertical([
+            Constraint::Length(2),  // Header with summary
+            Constraint::Min(8),     // Peer table
+            Constraint::Length(7),  // Detail section
+        ])
+        .split(area);
+
+        // Count connected peers
+        let connected = self.kubespan_peers.iter().filter(|p| p.state == "up").count();
+        let total = self.kubespan_peers.len();
+
+        // Header with summary
+        let header = Line::from(vec![
+            Span::styled(
+                format!(" KubeSpan │ {} ({}) │ ", self.hostname, self.address),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{}/{} peers connected", connected, total),
+                if connected == total {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            ),
         ]);
-        frame.render_widget(Paragraph::new(footer), chunks[2]);
+        frame.render_widget(Paragraph::new(header), content_chunks[0]);
+
+        // Peer table
+        let header_row = Row::new(vec![
+            Cell::from("HOSTNAME").style(Style::default().fg(Color::DarkGray)),
+            Cell::from("ENDPOINT").style(Style::default().fg(Color::DarkGray)),
+            Cell::from("RTT").style(Style::default().fg(Color::DarkGray)),
+            Cell::from("STATE").style(Style::default().fg(Color::DarkGray)),
+            Cell::from("RX").style(Style::default().fg(Color::DarkGray)),
+            Cell::from("TX").style(Style::default().fg(Color::DarkGray)),
+        ]);
+
+        let rows: Vec<Row> = self
+            .kubespan_peers
+            .iter()
+            .enumerate()
+            .map(|(i, peer)| {
+                let is_selected = i == self.kubespan_selected;
+                let style = if is_selected {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+
+                let state_style = match peer.state.as_str() {
+                    "up" => Style::default().fg(Color::Green),
+                    "down" => Style::default().fg(Color::Red),
+                    _ => Style::default().fg(Color::Yellow),
+                };
+
+                let rtt_str = peer.rtt_ms.map(|r| format!("{:.1}ms", r)).unwrap_or_else(|| "--".to_string());
+                let endpoint_str = peer.endpoint.clone().unwrap_or_else(|| "--".to_string());
+
+                Row::new(vec![
+                    Cell::from(peer.label.clone()).style(style),
+                    Cell::from(endpoint_str).style(style),
+                    Cell::from(rtt_str).style(style),
+                    Cell::from(peer.state.clone()).style(state_style.patch(style)),
+                    Cell::from(format_bytes(peer.rx_bytes)).style(style),
+                    Cell::from(format_bytes(peer.tx_bytes)).style(style),
+                ])
+            })
+            .collect();
+
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Min(20),      // Hostname
+                Constraint::Length(22),   // Endpoint
+                Constraint::Length(10),   // RTT
+                Constraint::Length(10),   // State
+                Constraint::Length(10),   // RX
+                Constraint::Length(10),   // TX
+            ],
+        )
+        .header(header_row)
+        .block(Block::default().borders(Borders::TOP));
+
+        frame.render_stateful_widget(table, content_chunks[1], &mut self.kubespan_table_state);
+
+        // Detail section for selected peer
+        if let Some(peer) = self.kubespan_peers.get(self.kubespan_selected) {
+            let detail_lines = vec![
+                Line::from(vec![
+                    Span::styled(" Selected: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&peer.label, Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   ID: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(&peer.id),
+                ]),
+                Line::from(vec![
+                    Span::styled("   Endpoint: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(peer.endpoint.as_deref().unwrap_or("--")),
+                ]),
+                Line::from(vec![
+                    Span::styled("   Last Handshake: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(peer.last_handshake.as_deref().unwrap_or("--")),
+                ]),
+                Line::from(vec![
+                    Span::styled("   Transfer: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format!(
+                        "RX {} / TX {}",
+                        format_bytes(peer.rx_bytes),
+                        format_bytes(peer.tx_bytes)
+                    )),
+                ]),
+            ];
+
+            let detail = Paragraph::new(detail_lines)
+                .block(Block::default().borders(Borders::TOP));
+            frame.render_widget(detail, content_chunks[2]);
+        }
+    }
+}
+
+/// Format bytes to human-readable string
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
     }
 }
 
@@ -1822,6 +2070,38 @@ impl NetworkStatsComponent {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),
+            KeyCode::Char('j') | KeyCode::Down => {
+                if !self.kubespan_peers.is_empty() {
+                    self.kubespan_selected = (self.kubespan_selected + 1) % self.kubespan_peers.len();
+                    self.kubespan_table_state.select(Some(self.kubespan_selected));
+                }
+                Ok(None)
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if !self.kubespan_peers.is_empty() {
+                    self.kubespan_selected = if self.kubespan_selected == 0 {
+                        self.kubespan_peers.len() - 1
+                    } else {
+                        self.kubespan_selected - 1
+                    };
+                    self.kubespan_table_state.select(Some(self.kubespan_selected));
+                }
+                Ok(None)
+            }
+            KeyCode::Char('g') => {
+                if !self.kubespan_peers.is_empty() {
+                    self.kubespan_selected = 0;
+                    self.kubespan_table_state.select(Some(0));
+                }
+                Ok(None)
+            }
+            KeyCode::Char('G') => {
+                if !self.kubespan_peers.is_empty() {
+                    self.kubespan_selected = self.kubespan_peers.len() - 1;
+                    self.kubespan_table_state.select(Some(self.kubespan_selected));
+                }
+                Ok(None)
+            }
             KeyCode::Tab => {
                 self.view_mode = self.view_mode.next();
                 Ok(None)

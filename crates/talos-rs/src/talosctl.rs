@@ -51,6 +51,59 @@ pub struct MachineConfigInfo {
     pub machine_type: Option<String>,
 }
 
+/// KubeSpan peer status from KubeSpanPeerStatus resource
+#[derive(Debug, Clone)]
+pub struct KubeSpanPeerStatus {
+    /// Peer ID (usually the node name or public key)
+    pub id: String,
+    /// Peer label/hostname
+    pub label: String,
+    /// Endpoint address (IP:port)
+    pub endpoint: Option<String>,
+    /// Peer state (e.g., "up", "down", "unknown")
+    pub state: String,
+    /// Round-trip time in milliseconds
+    pub rtt_ms: Option<f64>,
+    /// Last handshake time
+    pub last_handshake: Option<String>,
+    /// Received bytes
+    pub rx_bytes: u64,
+    /// Transmitted bytes
+    pub tx_bytes: u64,
+}
+
+/// Discovery member from Members resource
+#[derive(Debug, Clone)]
+pub struct DiscoveryMember {
+    /// Member ID (node ID)
+    pub id: String,
+    /// Member addresses
+    pub addresses: Vec<String>,
+    /// Hostname
+    pub hostname: String,
+    /// Machine type (controlplane, worker)
+    pub machine_type: String,
+    /// Operating system
+    pub operating_system: String,
+}
+
+/// Address status from AddressStatus resource (for VIP detection)
+#[derive(Debug, Clone)]
+pub struct AddressStatus {
+    /// Address ID (interface name)
+    pub id: String,
+    /// Link name
+    pub link_name: String,
+    /// Address with CIDR
+    pub address: String,
+    /// Address family (inet, inet6)
+    pub family: String,
+    /// Address scope
+    pub scope: String,
+    /// Flags (e.g., contains "vip" for shared VIPs)
+    pub flags: Vec<String>,
+}
+
 /// Get volume status for a node
 ///
 /// Executes: talosctl get volumestatus --nodes <node> -o yaml
@@ -65,6 +118,37 @@ pub fn get_volume_status(node: &str) -> Result<Vec<VolumeStatus>, TalosError> {
 pub fn get_machine_config(node: &str) -> Result<MachineConfigInfo, TalosError> {
     let output = exec_talosctl(&["get", "machineconfig", "--nodes", node, "-o", "yaml"])?;
     parse_machine_config_yaml(&output)
+}
+
+/// Get KubeSpan peer status for a node
+///
+/// Executes: talosctl get kubespanpeerstatus --nodes <node> -o yaml
+pub fn get_kubespan_peers(node: &str) -> Result<Vec<KubeSpanPeerStatus>, TalosError> {
+    let output = exec_talosctl(&["get", "kubespanpeerstatus", "--nodes", node, "-o", "yaml"])?;
+    parse_kubespan_peers_yaml(&output)
+}
+
+/// Get discovery members for a node
+///
+/// Executes: talosctl get members --nodes <node> -o yaml
+pub fn get_discovery_members(node: &str) -> Result<Vec<DiscoveryMember>, TalosError> {
+    let output = exec_talosctl(&["get", "members", "--nodes", node, "-o", "yaml"])?;
+    parse_discovery_members_yaml(&output)
+}
+
+/// Get address status for a node (for VIP detection)
+///
+/// Executes: talosctl get addressstatus --nodes <node> -o yaml
+pub fn get_address_status(node: &str) -> Result<Vec<AddressStatus>, TalosError> {
+    let output = exec_talosctl(&["get", "addressstatus", "--nodes", node, "-o", "yaml"])?;
+    parse_address_status_yaml(&output)
+}
+
+/// Check if KubeSpan is enabled for a node
+///
+/// Executes: talosctl get kubespanidentity --nodes <node> -o yaml
+pub fn is_kubespan_enabled(node: &str) -> bool {
+    exec_talosctl(&["get", "kubespanidentity", "--nodes", node, "-o", "yaml"]).is_ok()
 }
 
 /// Parse volume status YAML output from talosctl
@@ -162,6 +246,265 @@ fn parse_machine_config_yaml(yaml_str: &str) -> Result<MachineConfigInfo, TalosE
         version,
         machine_type,
     })
+}
+
+/// Parse KubeSpan peer status YAML output from talosctl
+fn parse_kubespan_peers_yaml(yaml_str: &str) -> Result<Vec<KubeSpanPeerStatus>, TalosError> {
+    let mut peers = Vec::new();
+
+    for doc_str in yaml_str.split("\n---") {
+        let doc_str = doc_str.trim();
+        if doc_str.is_empty() {
+            continue;
+        }
+
+        let doc: serde_yaml::Value = match serde_yaml::from_str(doc_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let id = doc
+            .get("metadata")
+            .and_then(|m| m.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if id.is_empty() {
+            continue;
+        }
+
+        let spec = doc.get("spec");
+
+        let label = spec
+            .and_then(|s| s.get("label"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&id)
+            .to_string();
+
+        let endpoint = spec
+            .and_then(|s| s.get("endpoint"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let state = spec
+            .and_then(|s| s.get("state"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // RTT might be in nanoseconds or have a duration format
+        let rtt_ms = spec
+            .and_then(|s| s.get("lastUsedEndpoint"))
+            .and_then(|e| e.get("rtt"))
+            .and_then(|v| {
+                // Could be a number or a string like "2.5ms"
+                if let Some(n) = v.as_f64() {
+                    Some(n / 1_000_000.0) // nanoseconds to ms
+                } else if let Some(s) = v.as_str() {
+                    parse_duration_to_ms(s)
+                } else {
+                    None
+                }
+            });
+
+        let last_handshake = spec
+            .and_then(|s| s.get("lastHandshakeTime"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let rx_bytes = spec
+            .and_then(|s| s.get("receiveBytes"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let tx_bytes = spec
+            .and_then(|s| s.get("transmitBytes"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        peers.push(KubeSpanPeerStatus {
+            id,
+            label,
+            endpoint,
+            state,
+            rtt_ms,
+            last_handshake,
+            rx_bytes,
+            tx_bytes,
+        });
+    }
+
+    Ok(peers)
+}
+
+/// Parse discovery members YAML output from talosctl
+fn parse_discovery_members_yaml(yaml_str: &str) -> Result<Vec<DiscoveryMember>, TalosError> {
+    let mut members = Vec::new();
+
+    for doc_str in yaml_str.split("\n---") {
+        let doc_str = doc_str.trim();
+        if doc_str.is_empty() {
+            continue;
+        }
+
+        let doc: serde_yaml::Value = match serde_yaml::from_str(doc_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let id = doc
+            .get("metadata")
+            .and_then(|m| m.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if id.is_empty() {
+            continue;
+        }
+
+        let spec = doc.get("spec");
+
+        let addresses = spec
+            .and_then(|s| s.get("addresses"))
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let hostname = spec
+            .and_then(|s| s.get("hostname"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let machine_type = spec
+            .and_then(|s| s.get("machineType"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let operating_system = spec
+            .and_then(|s| s.get("operatingSystem"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        members.push(DiscoveryMember {
+            id,
+            addresses,
+            hostname,
+            machine_type,
+            operating_system,
+        });
+    }
+
+    Ok(members)
+}
+
+/// Parse address status YAML output from talosctl
+fn parse_address_status_yaml(yaml_str: &str) -> Result<Vec<AddressStatus>, TalosError> {
+    let mut addresses = Vec::new();
+
+    for doc_str in yaml_str.split("\n---") {
+        let doc_str = doc_str.trim();
+        if doc_str.is_empty() {
+            continue;
+        }
+
+        let doc: serde_yaml::Value = match serde_yaml::from_str(doc_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let id = doc
+            .get("metadata")
+            .and_then(|m| m.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if id.is_empty() {
+            continue;
+        }
+
+        let spec = doc.get("spec");
+
+        let link_name = spec
+            .and_then(|s| s.get("linkName"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let address = spec
+            .and_then(|s| s.get("address"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let family = spec
+            .and_then(|s| s.get("family"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("inet")
+            .to_string();
+
+        let scope = spec
+            .and_then(|s| s.get("scope"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("global")
+            .to_string();
+
+        let flags = spec
+            .and_then(|s| s.get("flags"))
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        addresses.push(AddressStatus {
+            id,
+            link_name,
+            address,
+            family,
+            scope,
+            flags,
+        });
+    }
+
+    Ok(addresses)
+}
+
+/// Parse a duration string like "2.5ms" or "1s" to milliseconds
+fn parse_duration_to_ms(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if s.ends_with("ms") {
+        s.trim_end_matches("ms").parse::<f64>().ok()
+    } else if s.ends_with("µs") || s.ends_with("us") {
+        s.trim_end_matches("µs")
+            .trim_end_matches("us")
+            .parse::<f64>()
+            .ok()
+            .map(|v| v / 1000.0)
+    } else if s.ends_with("ns") {
+        s.trim_end_matches("ns")
+            .parse::<f64>()
+            .ok()
+            .map(|v| v / 1_000_000.0)
+    } else if s.ends_with('s') {
+        s.trim_end_matches('s')
+            .parse::<f64>()
+            .ok()
+            .map(|v| v * 1000.0)
+    } else {
+        s.parse::<f64>().ok()
+    }
 }
 
 #[cfg(test)]

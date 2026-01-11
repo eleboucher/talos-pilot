@@ -81,4 +81,8 @@ pub use client::{
 };
 pub use config::{Context, TalosConfig};
 pub use error::TalosError;
-pub use talosctl::{get_machine_config, get_volume_status, MachineConfigInfo, VolumeStatus};
+pub use talosctl::{
+    get_address_status, get_discovery_members, get_kubespan_peers, get_machine_config,
+    get_volume_status, is_kubespan_enabled, AddressStatus, DiscoveryMember, KubeSpanPeerStatus,
+    MachineConfigInfo, VolumeStatus,
+};

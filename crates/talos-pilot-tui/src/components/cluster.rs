@@ -135,6 +135,10 @@ pub struct ClusterComponent {
     focused_pane: FocusedPane,
     /// Currently selected navigation menu item
     selected_menu_item: usize,
+    /// Auto-refresh enabled
+    auto_refresh: bool,
+    /// Last auto-refresh time for selected node
+    last_auto_refresh: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -176,6 +180,8 @@ impl ClusterComponent {
             vip_info: None,
             focused_pane: FocusedPane::Nodes,
             selected_menu_item: 0,
+            auto_refresh: true,
+            last_auto_refresh: None,
         }
     }
 
@@ -389,6 +395,65 @@ impl ClusterComponent {
         }
 
         Ok(())
+    }
+
+    /// Refresh only the selected node's stats (memory, load, services)
+    /// This is lighter weight than a full refresh
+    pub async fn refresh_selected_node(&mut self) -> Result<()> {
+        let Some(client) = &self.client else {
+            return Ok(());
+        };
+
+        // Get the selected node's name and IP
+        let Some(version) = self.versions.get(self.selected) else {
+            return Ok(());
+        };
+        let node_name = version.node.clone();
+        let Some(node_ip) = self.node_ips.get(&node_name).cloned() else {
+            return Ok(());
+        };
+
+        let node_client = client.with_node(&node_ip);
+
+        // Fetch services, memory, and load for this node
+        if let Ok(mut node_services) = node_client.services().await {
+            for s in &mut node_services {
+                s.node = node_name.clone();
+            }
+            // Update the services for this node
+            self.services.retain(|s| s.node != node_name);
+            self.services.extend(node_services);
+        }
+
+        if let Ok(mut node_memory) = node_client.memory().await {
+            for m in &mut node_memory {
+                m.node = node_name.clone();
+            }
+            self.memory.retain(|m| m.node != node_name);
+            self.memory.extend(node_memory);
+        }
+
+        if let Ok(mut node_load) = node_client.load_avg().await {
+            for l in &mut node_load {
+                l.node = node_name.clone();
+            }
+            self.load_avg.retain(|l| l.node != node_name);
+            self.load_avg.extend(node_load);
+        }
+
+        self.last_auto_refresh = Some(std::time::Instant::now());
+        Ok(())
+    }
+
+    /// Check if auto-refresh should trigger (every 5 seconds)
+    pub fn should_auto_refresh(&self) -> bool {
+        if !self.auto_refresh {
+            return false;
+        }
+        match self.last_auto_refresh {
+            None => true,
+            Some(last) => last.elapsed().as_secs() >= 5,
+        }
     }
 
     /// Get services for a node
@@ -690,6 +755,12 @@ impl Component for ClusterComponent {
             KeyCode::Char('c') => Ok(Some(Action::ShowSecurity)),
             KeyCode::Char('y') => Ok(Some(Action::ShowLifecycle)),
 
+            // Toggle auto-refresh
+            KeyCode::Char('a') => {
+                self.auto_refresh = !self.auto_refresh;
+                Ok(None)
+            }
+
             _ => Ok(None),
         }
     }
@@ -725,12 +796,14 @@ impl Component for ClusterComponent {
         self.draw_details_pane(frame, content_layout[1]);
 
         // Compact footer with essential controls
+        let auto_refresh_status = if self.auto_refresh { "ON" } else { "OFF" };
+        let auto_refresh_color = if self.auto_refresh { Color::Green } else { Color::DarkGray };
         let footer_line = Line::from(vec![
             Span::styled(" [j/k]", Style::default().fg(Color::Yellow)),
             Span::styled(" navigate", Style::default().dim()),
             Span::raw("  "),
             Span::styled("[Tab]", Style::default().fg(Color::Yellow)),
-            Span::styled(" services", Style::default().dim()),
+            Span::styled(" pane", Style::default().dim()),
             Span::raw("  "),
             Span::styled("[Enter]", Style::default().fg(Color::Yellow)),
             Span::styled(" select", Style::default().dim()),
@@ -740,6 +813,10 @@ impl Component for ClusterComponent {
             Span::raw("  "),
             Span::styled("[r]", Style::default().fg(Color::Yellow)),
             Span::styled(" refresh", Style::default().dim()),
+            Span::raw("  "),
+            Span::styled("[a]", Style::default().fg(Color::Yellow)),
+            Span::styled(" auto:", Style::default().dim()),
+            Span::styled(auto_refresh_status, Style::default().fg(auto_refresh_color)),
             Span::raw("  "),
             Span::styled("[q]", Style::default().fg(Color::Yellow)),
             Span::styled(" quit", Style::default().dim()),

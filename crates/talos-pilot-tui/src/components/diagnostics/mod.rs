@@ -198,24 +198,19 @@ impl DiagnosticsComponent {
         self.update_table_state();
     }
 
-    /// Select next check in current category
+    /// Select next check in current category (clamps at end, no wrapping)
     fn next_check(&mut self) {
         let count = self.current_checks().len();
-        if count > 0 {
-            self.selected_check = (self.selected_check + 1) % count;
+        if count > 0 && self.selected_check < count - 1 {
+            self.selected_check += 1;
             self.update_table_state();
         }
     }
 
-    /// Select previous check in current category
+    /// Select previous check in current category (clamps at start, no wrapping)
     fn prev_check(&mut self) {
-        let count = self.current_checks().len();
-        if count > 0 {
-            self.selected_check = if self.selected_check == 0 {
-                count - 1
-            } else {
-                self.selected_check - 1
-            };
+        if self.selected_check > 0 {
+            self.selected_check -= 1;
             self.update_table_state();
         }
     }
@@ -223,6 +218,17 @@ impl DiagnosticsComponent {
     /// Update table state to match selection
     fn update_table_state(&mut self) {
         self.table_state.select(Some(self.selected_check));
+    }
+
+    /// Ensure selected_check is within bounds for current category
+    fn ensure_valid_selection(&mut self) {
+        let count = self.current_checks().len();
+        if count == 0 {
+            self.selected_check = 0;
+        } else if self.selected_check >= count {
+            self.selected_check = count - 1;
+        }
+        self.update_table_state();
     }
 
     /// Initiate a fix action or show details for the currently selected check
@@ -495,6 +501,8 @@ impl DiagnosticsComponent {
                 self.cni_checks = cni;
                 self.addon_checks = addons_result;
                 self.last_refresh = Some(Instant::now());
+                // Ensure selection is valid after checks change
+                self.ensure_valid_selection();
             }
             Err(_) => {
                 self.set_error("Timeout fetching diagnostics".to_string());

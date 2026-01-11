@@ -303,6 +303,10 @@ impl App {
                         if let Some(next_action) = self.cluster.update(Action::Tick)? {
                             Box::pin(self.handle_action(next_action)).await?;
                         }
+                        // Auto-refresh selected node stats every 5 seconds
+                        if self.cluster.should_auto_refresh() {
+                            let _ = self.cluster.refresh_selected_node().await;
+                        }
                     }
                     View::MultiLogs => {
                         if let Some(multi_logs) = &mut self.multi_logs

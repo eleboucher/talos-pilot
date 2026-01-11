@@ -70,20 +70,22 @@ pub enum ViewMode {
 
 impl ViewMode {
     /// Get the next view mode (for Tab cycling)
+    /// Note: Connections is not part of Tab rotation - it's accessed via Enter
     pub fn next(&self) -> Self {
         match self {
-            ViewMode::Interfaces => ViewMode::Connections,
-            ViewMode::Connections => ViewMode::KubeSpan,
+            ViewMode::Interfaces => ViewMode::KubeSpan,
+            ViewMode::Connections => ViewMode::KubeSpan, // Exit to KubeSpan if tabbing from connections
             ViewMode::KubeSpan => ViewMode::Interfaces,
         }
     }
 
     /// Get the previous view mode (for Shift+Tab cycling)
+    /// Note: Connections is not part of Tab rotation - it's accessed via Enter
     pub fn prev(&self) -> Self {
         match self {
             ViewMode::Interfaces => ViewMode::KubeSpan,
-            ViewMode::Connections => ViewMode::Interfaces,
-            ViewMode::KubeSpan => ViewMode::Connections,
+            ViewMode::Connections => ViewMode::Interfaces, // Exit to Interfaces if shift-tabbing from connections
+            ViewMode::KubeSpan => ViewMode::Interfaces,
         }
     }
 
@@ -919,21 +921,26 @@ impl NetworkStatsComponent {
 
         let auto_indicator = if self.auto_refresh { "" } else { " [AUTO:OFF]" };
 
-        // Build tab bar for right side
+        // Build tab bar for right side (Connections is a subscreen, not a tab)
         let tab_ifaces = if self.view_mode == ViewMode::Interfaces {
             Span::styled("[Interfaces]", Style::default().fg(Color::Cyan))
+        } else if self.view_mode == ViewMode::Connections {
+            // When in Connections subscreen, show Interfaces as the parent
+            Span::styled(" Interfaces>", Style::default().fg(Color::DarkGray))
         } else {
             Span::styled(" Interfaces ", Style::default().fg(Color::DarkGray))
-        };
-        let tab_conns = if self.view_mode == ViewMode::Connections {
-            Span::styled("[Connections]", Style::default().fg(Color::Cyan))
-        } else {
-            Span::styled(" Connections ", Style::default().fg(Color::DarkGray))
         };
         let tab_kubespan = if self.view_mode == ViewMode::KubeSpan {
             Span::styled("[KubeSpan]", Style::default().fg(Color::Cyan))
         } else {
             Span::styled(" KubeSpan ", Style::default().fg(Color::DarkGray))
+        };
+
+        // Show "Connections" indicator when in that subscreen
+        let conns_indicator = if self.view_mode == ViewMode::Connections {
+            Span::styled("[Connections]", Style::default().fg(Color::Cyan))
+        } else {
+            Span::raw("")
         };
 
         let spans = vec![
@@ -947,7 +954,7 @@ impl NetworkStatsComponent {
             Span::styled(auto_indicator, Style::default().fg(Color::Yellow)),
             Span::raw("  │ "),
             tab_ifaces,
-            tab_conns,
+            conns_indicator,
             tab_kubespan,
         ];
 
@@ -1337,35 +1344,17 @@ impl NetworkStatsComponent {
             self.selected_interface.clone().unwrap_or_else(|| "all".to_string())
         };
 
-        // Build tab bar for right side
-        let tab_ifaces = if self.view_mode == ViewMode::Interfaces {
-            Span::styled("[Interfaces]", Style::default().fg(Color::Cyan))
-        } else {
-            Span::styled(" Interfaces ", Style::default().fg(Color::DarkGray))
-        };
-        let tab_conns = if self.view_mode == ViewMode::Connections {
-            Span::styled("[Connections]", Style::default().fg(Color::Cyan))
-        } else {
-            Span::styled(" Connections ", Style::default().fg(Color::DarkGray))
-        };
-        let tab_kubespan = if self.view_mode == ViewMode::KubeSpan {
-            Span::styled("[KubeSpan]", Style::default().fg(Color::Cyan))
-        } else {
-            Span::styled(" KubeSpan ", Style::default().fg(Color::DarkGray))
-        };
-
+        // Connections is a subscreen of Interfaces - show breadcrumb style
         let mut spans = vec![
-            Span::styled("Connections: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("Interfaces", Style::default().fg(Color::DarkGray)),
+            Span::styled(" > ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Connections: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::styled(&iface_display, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::styled(" @ ", Style::default().fg(Color::DarkGray)),
             Span::raw(&self.hostname),
             Span::raw("  "),
             Span::styled(format!("{} connections", conn_count), Style::default().fg(Color::DarkGray)),
             Span::styled(filter_label, Style::default().fg(Color::Yellow)),
-            Span::raw("  │ "),
-            tab_ifaces,
-            tab_conns,
-            tab_kubespan,
         ];
 
         // Show visual mode indicator
@@ -1550,14 +1539,14 @@ impl NetworkStatsComponent {
                 Span::raw(" yank  "),
                 Span::styled("[Esc/V]", Style::default().fg(Color::Cyan)),
                 Span::raw(" cancel  "),
-                Span::styled("[q]", Style::default().fg(Color::Cyan)),
+                Span::styled("[q/Tab]", Style::default().fg(Color::Cyan)),
                 Span::raw(" back"),
             ]
         } else {
             // Normal mode footer
             vec![
-                Span::styled("[Tab]", Style::default().fg(Color::Cyan)),
-                Span::raw(" views  "),
+                Span::styled("[j/k]", Style::default().fg(Color::Cyan)),
+                Span::raw(" navigate  "),
                 Span::styled("[c]", Style::default().fg(Color::Cyan)),
                 Span::raw(" capture  "),
                 Span::styled("[f]", Style::default().fg(Color::Cyan)),
@@ -1568,7 +1557,7 @@ impl NetworkStatsComponent {
                 Span::raw(format!(" {}  ", listen_label)),
                 Span::styled("[a]", Style::default().fg(Color::Cyan)),
                 Span::raw(format!(" {}  ", all_label)),
-                Span::styled("[q]", Style::default().fg(Color::Cyan)),
+                Span::styled("[q/Tab]", Style::default().fg(Color::Cyan)),
                 Span::raw(" back"),
             ]
         };
@@ -1741,19 +1730,13 @@ impl NetworkStatsComponent {
         ])
         .split(area);
 
-        // Tab bar
+        // Tab bar (only Interfaces and KubeSpan - Connections is a subscreen)
         let tabs = Line::from(vec![
             Span::raw(" "),
             if self.view_mode == ViewMode::Interfaces {
                 Span::styled(" Interfaces ", Style::default().fg(Color::Black).bg(Color::Cyan))
             } else {
                 Span::styled(" Interfaces ", Style::default().fg(Color::DarkGray))
-            },
-            Span::raw(" "),
-            if self.view_mode == ViewMode::Connections {
-                Span::styled(" Connections ", Style::default().fg(Color::Black).bg(Color::Cyan))
-            } else {
-                Span::styled(" Connections ", Style::default().fg(Color::DarkGray))
             },
             Span::raw(" "),
             if self.view_mode == ViewMode::KubeSpan {
@@ -2289,13 +2272,9 @@ impl NetworkStatsComponent {
                 Ok(Some(Action::Refresh)) // Trigger fetch immediately
             }
 
-            // Tab cycling between views
-            KeyCode::Tab => {
-                self.view_mode = self.view_mode.next();
-                Ok(None)
-            }
-            KeyCode::BackTab => {
-                self.view_mode = self.view_mode.prev();
+            // Tab exits connections view back to Interfaces (connections is a subscreen)
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.exit_connections_view();
                 Ok(None)
             }
 

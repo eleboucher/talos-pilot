@@ -18,6 +18,7 @@ use ratatui::{
     Frame,
 };
 use std::time::Instant;
+use talos_pilot_core::SelectableList;
 use talos_rs::{get_discovery_members_for_context, DiscoveryMember, NodeTimeInfo, TalosClient, TalosConfig, VersionInfo};
 
 /// Auto-refresh interval in seconds
@@ -122,16 +123,13 @@ pub struct LifecycleComponent {
     /// Time sync info per node
     time_info: Vec<NodeTimeInfo>,
 
-    /// Node statuses
-    node_statuses: Vec<NodeStatus>,
+    /// Node statuses with selection
+    node_statuses: SelectableList<NodeStatus>,
 
     /// Alerts
     alerts: Vec<Alert>,
 
-    /// Currently selected node index
-    selected: usize,
-
-    /// Table state for rendering
+    /// Table state for rendering (synced with node_statuses selection)
     table_state: TableState,
 
     /// Loading state
@@ -174,9 +172,8 @@ impl LifecycleComponent {
             context_name,
             versions: Vec::new(),
             time_info: Vec::new(),
-            node_statuses: Vec::new(),
+            node_statuses: SelectableList::default(),
             alerts: Vec::new(),
-            selected: 0,
             table_state,
             loading: true,
             error: None,
@@ -266,7 +263,7 @@ impl LifecycleComponent {
 
         // Build node statuses combining version and time info
         // Fetch config hash for each node individually for drift detection
-        self.node_statuses = self.versions
+        let statuses: Vec<NodeStatus> = self.versions
             .iter()
             .map(|v| {
                 // Look up time sync status for this node
@@ -291,6 +288,10 @@ impl LifecycleComponent {
                 }
             })
             .collect();
+
+        // Update items, preserving selection if possible
+        self.node_statuses.update_items(statuses);
+        self.table_state.select(Some(self.node_statuses.selected_index()));
 
         // Fetch pre-operation health checks
         self.fetch_pre_op_checks(&client).await;
@@ -394,7 +395,7 @@ impl LifecycleComponent {
         }
 
         // Check for time sync issues
-        let unsynced_nodes: Vec<&str> = self.node_statuses.iter()
+        let unsynced_nodes: Vec<&str> = self.node_statuses.items().iter()
             .filter(|n| n.time_synced == Some(false))
             .map(|n| n.hostname.as_str())
             .collect();
@@ -406,7 +407,7 @@ impl LifecycleComponent {
         }
 
         // Check for config drift (compare hashes across nodes)
-        let config_hashes: Vec<(&str, Option<&str>)> = self.node_statuses.iter()
+        let config_hashes: Vec<(&str, Option<&str>)> = self.node_statuses.items().iter()
             .map(|n| (n.hostname.as_str(), n.config_hash.as_deref()))
             .collect();
 
@@ -486,24 +487,14 @@ impl LifecycleComponent {
 
     /// Navigation: select next node
     fn select_next(&mut self) {
-        if self.node_statuses.is_empty() {
-            return;
-        }
-        self.selected = (self.selected + 1) % self.node_statuses.len();
-        self.table_state.select(Some(self.selected));
+        self.node_statuses.select_next();
+        self.table_state.select(Some(self.node_statuses.selected_index()));
     }
 
     /// Navigation: select previous node
     fn select_prev(&mut self) {
-        if self.node_statuses.is_empty() {
-            return;
-        }
-        if self.selected == 0 {
-            self.selected = self.node_statuses.len() - 1;
-        } else {
-            self.selected -= 1;
-        }
-        self.table_state.select(Some(self.selected));
+        self.node_statuses.select_prev();
+        self.table_state.select(Some(self.node_statuses.selected_index()));
     }
 
     /// Draw the cluster versions section
@@ -566,7 +557,7 @@ impl LifecycleComponent {
             });
         let header = Row::new(header_cells).height(1);
 
-        let rows = self.node_statuses.iter().map(|node| {
+        let rows = self.node_statuses.items().iter().map(|node| {
             let config_cell = match &node.config_hash {
                 Some(hash) => Span::styled(&hash[..8.min(hash.len())], Style::default().fg(Color::White)),
                 None => Span::styled("-", Style::default().fg(Color::Gray)),

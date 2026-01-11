@@ -14,7 +14,7 @@ use ratatui::{
     Frame,
 };
 use std::time::Instant;
-use talos_pilot_core::{format_bytes_signed, HasHealth, QuorumState};
+use talos_pilot_core::{format_bytes_signed, HasHealth, QuorumState, SelectableList};
 use talos_rs::{EtcdAlarm, EtcdMemberInfo, EtcdMemberStatus, TalosClient};
 
 /// Combined etcd member data (from member list + status)
@@ -65,8 +65,8 @@ const AUTO_REFRESH_INTERVAL_SECS: u64 = 5;
 
 /// Etcd cluster status component
 pub struct EtcdComponent {
-    /// Combined member data
-    members: Vec<EtcdMember>,
+    /// Combined member data with selection
+    members: SelectableList<EtcdMember>,
     /// Alarms
     alarms: Vec<EtcdAlarm>,
     /// Quorum state
@@ -76,9 +76,7 @@ pub struct EtcdComponent {
     /// Current revision (from leader)
     revision: u64,
 
-    /// Selected member index
-    selected: usize,
-    /// Table state for rendering
+    /// Table state for rendering (synced with members selection)
     table_state: TableState,
 
     /// Loading state
@@ -109,12 +107,11 @@ impl EtcdComponent {
         table_state.select(Some(0));
 
         Self {
-            members: Vec::new(),
+            members: SelectableList::default(),
             alarms: Vec::new(),
             quorum_state: QuorumState::Unknown,
             total_db_size: 0,
             revision: 0,
-            selected: 0,
             table_state,
             loading: true,
             error: None,
@@ -204,7 +201,7 @@ impl EtcdComponent {
         };
 
         // Combine member info with status
-        self.members = member_infos
+        let members: Vec<EtcdMember> = member_infos
             .into_iter()
             .map(|info| {
                 let status = statuses.iter().find(|s| s.member_id == info.id).cloned();
@@ -212,17 +209,17 @@ impl EtcdComponent {
             })
             .collect();
 
+        // Update items, preserving selection if possible
+        self.members.update_items(members);
+
         // Success - reset retry count and clear error
         self.retry_count = 0;
         self.error = None;
 
         tracing::info!("Loaded {} etcd members", self.members.len());
 
-        // Reset selection if needed
-        if !self.members.is_empty() && self.selected >= self.members.len() {
-            self.selected = 0;
-        }
-        self.table_state.select(Some(self.selected));
+        // Sync table state with SelectableList
+        self.table_state.select(Some(self.members.selected_index()));
 
         // Calculate quorum state
         self.calculate_quorum_state();
@@ -239,7 +236,7 @@ impl EtcdComponent {
     /// Calculate the quorum state based on member statuses
     fn calculate_quorum_state(&mut self) {
         let total = self.members.len();
-        let healthy = self.members.iter().filter(|m| m.status.is_some()).count();
+        let healthy = self.members.items().iter().filter(|m| m.status.is_some()).count();
         self.quorum_state = QuorumState::from_counts(healthy, total);
     }
 
@@ -247,6 +244,7 @@ impl EtcdComponent {
     fn calculate_totals(&mut self) {
         self.total_db_size = self
             .members
+            .items()
             .iter()
             .filter_map(|m| m.status.as_ref())
             .map(|s| s.db_size)
@@ -255,6 +253,7 @@ impl EtcdComponent {
 
         self.revision = self
             .members
+            .items()
             .iter()
             .filter_map(|m| m.status.as_ref())
             .map(|s| s.raft_index)
@@ -262,25 +261,16 @@ impl EtcdComponent {
             .unwrap_or(0);
     }
 
-    /// Get the currently selected member
-    fn selected_member(&self) -> Option<&EtcdMember> {
-        self.members.get(self.selected)
-    }
-
     /// Navigate to previous member
     fn select_prev(&mut self) {
-        if !self.members.is_empty() {
-            self.selected = self.selected.saturating_sub(1);
-            self.table_state.select(Some(self.selected));
-        }
+        self.members.select_prev_no_wrap();
+        self.table_state.select(Some(self.members.selected_index()));
     }
 
     /// Navigate to next member
     fn select_next(&mut self) {
-        if !self.members.is_empty() {
-            self.selected = (self.selected + 1).min(self.members.len() - 1);
-            self.table_state.select(Some(self.selected));
-        }
+        self.members.select_next_no_wrap();
+        self.table_state.select(Some(self.members.selected_index()));
     }
 
     /// Format error messages for user-friendly display
@@ -369,6 +359,7 @@ impl EtcdComponent {
     fn draw_member_table(&mut self, frame: &mut Frame, area: Rect) {
         let rows: Vec<Row> = self
             .members
+            .items()
             .iter()
             .map(|member| {
                 let (status_indicator, status_text, status_color) = match &member.status {
@@ -453,7 +444,7 @@ impl EtcdComponent {
 
     /// Draw the detail section for selected member
     fn draw_detail_section(&self, frame: &mut Frame, area: Rect) {
-        let Some(member) = self.selected_member() else {
+        let Some(member) = self.members.selected() else {
             return;
         };
 
@@ -621,7 +612,7 @@ impl Component for EtcdComponent {
                 }
                 // Use first member's hostname as the "node" but show all etcd services
                 // In practice, with the current API this shows etcd logs from all connected nodes
-                let node = self.members.first()
+                let node = self.members.items().first()
                     .map(|m| m.info.hostname.clone())
                     .unwrap_or_else(|| "controlplane".to_string());
                 let etcd_vec = vec!["etcd".to_string()];
@@ -634,7 +625,7 @@ impl Component for EtcdComponent {
             }
             KeyCode::Enter => {
                 // View etcd logs for selected member
-                if let Some(member) = self.selected_member() {
+                if let Some(member) = self.members.selected() {
                     let node = member.info.hostname.clone();
                     let etcd_vec = vec!["etcd".to_string()];
                     Ok(Some(Action::ShowMultiLogs(

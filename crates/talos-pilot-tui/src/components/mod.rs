@@ -12,6 +12,7 @@ pub mod multi_logs;
 pub mod network;
 pub mod processes;
 pub mod security;
+pub mod workloads;
 
 pub use cluster::ClusterComponent;
 pub use diagnostics::DiagnosticsComponent;
@@ -23,6 +24,7 @@ pub use multi_logs::MultiLogsComponent;
 pub use network::NetworkStatsComponent;
 pub use processes::ProcessesComponent;
 pub use security::SecurityComponent;
+pub use workloads::WorkloadHealthComponent;
 
 use crate::action::Action;
 use color_eyre::Result;

@@ -57,10 +57,11 @@ pub enum NavMenuItem {
     Diagnostics,
     Certs,
     Lifecycle,
+    Workloads,
 }
 
 impl NavMenuItem {
-    const ALL: [NavMenuItem; 7] = [
+    const ALL: [NavMenuItem; 8] = [
         NavMenuItem::Logs,
         NavMenuItem::Etcd,
         NavMenuItem::Network,
@@ -68,6 +69,7 @@ impl NavMenuItem {
         NavMenuItem::Diagnostics,
         NavMenuItem::Certs,
         NavMenuItem::Lifecycle,
+        NavMenuItem::Workloads,
     ];
 
     fn label(&self) -> &'static str {
@@ -79,6 +81,7 @@ impl NavMenuItem {
             NavMenuItem::Diagnostics => "Diag",
             NavMenuItem::Certs => "Certs",
             NavMenuItem::Lifecycle => "Life",
+            NavMenuItem::Workloads => "Work",
         }
     }
 
@@ -91,6 +94,7 @@ impl NavMenuItem {
             NavMenuItem::Diagnostics => "d",
             NavMenuItem::Certs => "c",
             NavMenuItem::Lifecycle => "y",
+            NavMenuItem::Workloads => "w",
         }
     }
 }
@@ -594,6 +598,7 @@ impl ClusterComponent {
             }
             NavMenuItem::Certs => Ok(Some(Action::ShowSecurity)),
             NavMenuItem::Lifecycle => Ok(Some(Action::ShowLifecycle)),
+            NavMenuItem::Workloads => Ok(Some(Action::ShowWorkloads)),
         }
     }
 
@@ -760,6 +765,7 @@ impl Component for ClusterComponent {
             }
             KeyCode::Char('c') => Ok(Some(Action::ShowSecurity)),
             KeyCode::Char('y') => Ok(Some(Action::ShowLifecycle)),
+            KeyCode::Char('w') => Ok(Some(Action::ShowWorkloads)),
 
             // Toggle auto-refresh
             KeyCode::Char('a') => {

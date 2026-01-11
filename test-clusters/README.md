@@ -17,8 +17,8 @@ export KUBECONFIG=$(pwd)/output/kubeconfig
 # Check what you have
 ./scripts/cluster.sh status
 
-# Add test workloads (healthy, crashing, pending, etc.)
-./scripts/cluster.sh workloads all
+# Add comprehensive test workloads (all scenarios)
+./scripts/cluster.sh workloads kitchen-sink
 
 # Run talos-pilot against it
 cd ../
@@ -58,19 +58,44 @@ cargo run --bin talos-pilot-tui
 # Create any cluster profile
 ./scripts/cluster.sh create cilium-ebpf
 
-# Add various workload states
-./scripts/cluster.sh workloads healthy     # Healthy deployments
-./scripts/cluster.sh workloads crashloop   # CrashLoopBackOff
-./scripts/cluster.sh workloads imagepull   # ImagePullBackOff
-./scripts/cluster.sh workloads pending     # Pending (unschedulable)
-./scripts/cluster.sh workloads pdb         # With PodDisruptionBudget
+# RECOMMENDED: Use kitchen-sink for comprehensive testing
+# This removes the control plane taint and creates all workload scenarios
+./scripts/cluster.sh workloads kitchen-sink
 
-# Or create all at once
-./scripts/cluster.sh workloads all
+# Or add individual workload scenarios:
+./scripts/cluster.sh workloads healthy      # Healthy nginx + redis
+./scripts/cluster.sh workloads crashloop    # CrashLoopBackOff
+./scripts/cluster.sh workloads imagepull    # ImagePullBackOff
+./scripts/cluster.sh workloads pending      # Pending (resource-constrained)
+./scripts/cluster.sh workloads pdb          # With PodDisruptionBudget
+./scripts/cluster.sh workloads oomkill      # OOMKilled (memory limit exceeded)
+./scripts/cluster.sh workloads highrestarts # High restart count
+./scripts/cluster.sh workloads degraded     # Partial replicas ready
+./scripts/cluster.sh workloads statefulset  # StatefulSet workloads
+./scripts/cluster.sh workloads daemonset    # DaemonSet workloads
+./scripts/cluster.sh workloads mixed        # Various workload types
 
 # Check what you have
 kubectl get pods -A
 ```
+
+#### Kitchen-Sink Details
+
+The `kitchen-sink` command creates 7 test namespaces with all workload scenarios:
+
+| Namespace | Workloads | Pod States |
+|-----------|-----------|------------|
+| `test-healthy` | nginx, redis | Running |
+| `test-failing` | crasher, bad-image, pending-pod | CrashLoopBackOff, ImagePullBackOff, Pending |
+| `test-oomkill` | memory-hog | OOMKilled (high restarts) |
+| `test-restarts` | flaky-app | High restart count |
+| `test-degraded` | partial-deploy | Partial replicas ready |
+| `test-stateful` | postgres, redis-cluster | StatefulSet pods |
+| `test-daemonset` | node-agent, fluentd | DaemonSet pods |
+
+This provides comprehensive coverage for testing the Workloads screen (`w` hotkey).
+
+**Note:** On single-node clusters, `kitchen-sink` automatically removes the control plane NoSchedule taint to allow all pods to schedule.
 
 ### Testing Hubble Flows
 

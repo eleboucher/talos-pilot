@@ -1,7 +1,7 @@
 //! Application state and main loop
 
 use crate::action::Action;
-use crate::components::{ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, ProcessesComponent, SecurityComponent};
+use crate::components::{ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, ProcessesComponent, SecurityComponent, WorkloadHealthComponent};
 use crate::tui::{self, Tui};
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyEventKind};
@@ -19,6 +19,7 @@ enum View {
     Diagnostics,
     Security,
     Lifecycle,
+    Workloads,
 }
 
 /// Main application state
@@ -43,6 +44,8 @@ pub struct App {
     security: Option<SecurityComponent>,
     /// Lifecycle component (created when viewing versions)
     lifecycle: Option<LifecycleComponent>,
+    /// Workload health component (created when viewing workloads)
+    workloads: Option<WorkloadHealthComponent>,
     /// Number of log lines to fetch per service
     tail_lines: i32,
     /// Tick rate for animations (ms)
@@ -83,6 +86,7 @@ impl App {
             diagnostics: None,
             security: None,
             lifecycle: None,
+            workloads: None,
             tail_lines,
             tick_rate: Duration::from_millis(100),
             action_rx,
@@ -155,6 +159,11 @@ impl App {
                             let _ = lifecycle.draw(frame, area);
                         }
                     }
+                    View::Workloads => {
+                        if let Some(workloads) = &mut self.workloads {
+                            let _ = workloads.draw(frame, area);
+                        }
+                    }
                 }
             })?;
 
@@ -209,6 +218,13 @@ impl App {
                             View::Lifecycle => {
                                 if let Some(lifecycle) = &mut self.lifecycle {
                                     lifecycle.handle_key_event(key)?
+                                } else {
+                                    None
+                                }
+                            }
+                            View::Workloads => {
+                                if let Some(workloads) = &mut self.workloads {
+                                    workloads.handle_key_event(key)?
                                 } else {
                                     None
                                 }
@@ -291,6 +307,9 @@ impl App {
                     View::Lifecycle => {
                         self.lifecycle = None;
                     }
+                    View::Workloads => {
+                        self.workloads = None;
+                    }
                     View::Cluster => {}
                 }
                 // Return to cluster view
@@ -353,6 +372,13 @@ impl App {
                     View::Lifecycle => {
                         if let Some(lifecycle) = &mut self.lifecycle
                             && let Some(next_action) = lifecycle.update(Action::Tick)?
+                        {
+                            Box::pin(self.handle_action(next_action)).await?;
+                        }
+                    }
+                    View::Workloads => {
+                        if let Some(workloads) = &mut self.workloads
+                            && let Some(next_action) = workloads.update(Action::Tick)?
                         {
                             Box::pin(self.handle_action(next_action)).await?;
                         }
@@ -422,6 +448,13 @@ impl App {
                         if let Some(lifecycle) = &mut self.lifecycle {
                             if let Err(e) = lifecycle.refresh().await {
                                 lifecycle.set_error(e.to_string());
+                            }
+                        }
+                    }
+                    View::Workloads => {
+                        if let Some(workloads) = &mut self.workloads {
+                            if let Err(e) = workloads.refresh().await {
+                                workloads.set_error(e.to_string());
                             }
                         }
                     }
@@ -598,6 +631,34 @@ impl App {
                 self.lifecycle = Some(lifecycle);
                 self.view = View::Lifecycle;
             }
+            Action::ShowWorkloads => {
+                // Switch to workload health view
+                tracing::info!("Viewing workload health");
+
+                // Create workloads component
+                let mut workloads = WorkloadHealthComponent::new();
+
+                // Create K8s client from Talos client
+                if let Some(talos_client) = self.cluster.client() {
+                    match crate::components::diagnostics::k8s::create_k8s_client(talos_client).await {
+                        Ok(k8s_client) => {
+                            workloads.set_k8s_client(k8s_client);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to create K8s client: {:?}", e);
+                            workloads.set_error(format!("Failed to connect to Kubernetes: {}", e));
+                        }
+                    }
+                }
+
+                if let Err(e) = workloads.refresh().await {
+                    tracing::error!("Workloads refresh error: {:?}", e);
+                    workloads.set_error(e.to_string());
+                }
+
+                self.workloads = Some(workloads);
+                self.view = View::Workloads;
+            }
             _ => {
                 // Forward to current component
                 match self.view {
@@ -651,6 +712,13 @@ impl App {
                     View::Lifecycle => {
                         if let Some(lifecycle) = &mut self.lifecycle
                             && let Some(next_action) = lifecycle.update(action)?
+                        {
+                            Box::pin(self.handle_action(next_action)).await?;
+                        }
+                    }
+                    View::Workloads => {
+                        if let Some(workloads) = &mut self.workloads
+                            && let Some(next_action) = workloads.update(action)?
                         {
                             Box::pin(self.handle_action(next_action)).await?;
                         }

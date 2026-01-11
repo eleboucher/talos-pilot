@@ -41,6 +41,8 @@ pub enum Action {
     ShowSecurity,
     /// Show lifecycle/version view
     ShowLifecycle,
+    /// Show workload health view
+    ShowWorkloads,
 
     // UI state
     Tick,

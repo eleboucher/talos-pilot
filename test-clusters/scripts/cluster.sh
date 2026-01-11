@@ -610,7 +610,7 @@ show_status() {
 }
 
 #
-# Create test workloads
+# Create test workloads - comprehensive set for testing workload health screen
 #
 create_workloads() {
     local workload_type="${1:-all}"
@@ -619,9 +619,34 @@ create_workloads() {
         healthy)
             log_info "Creating healthy workloads..."
             kubectl create namespace test-healthy 2>/dev/null || true
+            # Deployments
             kubectl create deployment nginx --image=nginx:alpine --replicas=3 -n test-healthy
             kubectl create deployment redis --image=redis:alpine --replicas=2 -n test-healthy
-            log_success "Created healthy workloads in test-healthy namespace"
+            # StatefulSet
+            cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: web
+  namespace: test-healthy
+spec:
+  serviceName: "web"
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+EOF
+            log_success "Created healthy workloads (3 Deployments, 1 StatefulSet) in test-healthy namespace"
             ;;
 
         crashloop)
@@ -659,6 +684,181 @@ EOF
             log_success "Created pending-pod (will stay Pending due to resource requests)"
             ;;
 
+        oomkill)
+            log_info "Creating OOMKilled workload..."
+            kubectl create namespace test-failing 2>/dev/null || true
+            cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oom-killer
+  namespace: test-failing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oom-killer
+  template:
+    metadata:
+      labels:
+        app: oom-killer
+    spec:
+      containers:
+      - name: oom
+        image: polinux/stress
+        resources:
+          limits:
+            memory: "50Mi"
+        command: ["stress"]
+        args: ["--vm", "1", "--vm-bytes", "200M", "--vm-hang", "1"]
+EOF
+            log_success "Created oom-killer deployment (will get OOMKilled)"
+            ;;
+
+        highrestarts)
+            log_info "Creating high-restart workload..."
+            kubectl create namespace test-degraded 2>/dev/null || true
+            cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flaky-app
+  namespace: test-degraded
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flaky-app
+  template:
+    metadata:
+      labels:
+        app: flaky-app
+    spec:
+      containers:
+      - name: flaky
+        image: busybox
+        command: ["/bin/sh", "-c", "sleep 5 && exit 0"]
+EOF
+            log_success "Created flaky-app deployment (will accumulate restarts)"
+            ;;
+
+        degraded)
+            log_info "Creating degraded workload (partial replicas)..."
+            kubectl create namespace test-degraded 2>/dev/null || true
+            # Create deployment with 3 replicas but one will fail
+            cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: partial-ready
+  namespace: test-degraded
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: partial-ready
+  template:
+    metadata:
+      labels:
+        app: partial-ready
+    spec:
+      containers:
+      - name: main
+        image: nginx:alpine
+      initContainers:
+      - name: init
+        image: busybox
+        command: ["/bin/sh", "-c", "if [ \$(hostname | grep -o '[0-9]*\$') = '2' ]; then exit 1; fi; exit 0"]
+EOF
+            log_success "Created partial-ready deployment (will have some pods failing init)"
+            ;;
+
+        statefulset)
+            log_info "Creating StatefulSet workloads..."
+            kubectl create namespace test-stateful 2>/dev/null || true
+            # Healthy StatefulSet
+            cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  namespace: test-stateful
+spec:
+  serviceName: "db"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: db
+  template:
+    metadata:
+      labels:
+        app: db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:alpine
+        env:
+        - name: POSTGRES_PASSWORD
+          value: "testpassword"
+        ports:
+        - containerPort: 5432
+EOF
+            # Failing StatefulSet
+            cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db-broken
+  namespace: test-stateful
+spec:
+  serviceName: "db-broken"
+  replicas: 2
+  selector:
+    matchLabels:
+      app: db-broken
+  template:
+    metadata:
+      labels:
+        app: db-broken
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:alpine
+        # Missing POSTGRES_PASSWORD will cause crash
+        ports:
+        - containerPort: 5432
+EOF
+            log_success "Created StatefulSet workloads (1 healthy, 1 failing) in test-stateful namespace"
+            ;;
+
+        daemonset)
+            log_info "Creating DaemonSet workloads..."
+            kubectl create namespace test-daemonset 2>/dev/null || true
+            # Healthy DaemonSet
+            cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: test-daemonset
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      containers:
+      - name: exporter
+        image: nginx:alpine
+        ports:
+        - containerPort: 9100
+EOF
+            log_success "Created DaemonSet workload in test-daemonset namespace"
+            ;;
+
         pdb)
             log_info "Creating workload with PodDisruptionBudget..."
             kubectl create namespace test-pdb 2>/dev/null || true
@@ -678,23 +878,121 @@ EOF
             log_success "Created pdb-test with PDB (minAvailable: 3, will block drains)"
             ;;
 
+        mixed)
+            log_info "Creating mixed namespace with healthy and failing workloads..."
+            kubectl create namespace test-mixed 2>/dev/null || true
+            # Healthy deployment
+            kubectl create deployment app-frontend --image=nginx:alpine --replicas=2 -n test-mixed
+            kubectl create deployment app-backend --image=redis:alpine --replicas=1 -n test-mixed
+            # Failing deployment
+            kubectl create deployment app-worker --image=busybox -n test-mixed -- /bin/sh -c "exit 1"
+            log_success "Created mixed workloads (2 healthy, 1 failing) in test-mixed namespace"
+            ;;
+
+        kitchen-sink)
+            log_info "Setting up kitchen-sink workloads for comprehensive testing..."
+            echo ""
+
+            # Remove control plane taint for single-node clusters
+            log_info "Removing control plane taint for single-node cluster..."
+            kubectl taint nodes --all node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true
+            log_success "Control plane taint removed (workloads can schedule on control plane)"
+
+            # Clean up any existing test workloads first
+            log_info "Cleaning up existing test workloads..."
+            kubectl delete namespace test-healthy test-failing test-degraded test-stateful test-daemonset test-pdb test-mixed 2>/dev/null || true
+            sleep 2
+
+            # Create all workloads
+            create_workloads healthy
+            create_workloads crashloop
+            create_workloads imagepull
+            create_workloads pending
+            create_workloads oomkill
+            create_workloads highrestarts
+            create_workloads statefulset
+            create_workloads daemonset
+            create_workloads pdb
+            create_workloads mixed
+
+            echo ""
+            log_success "Kitchen-sink workloads created!"
+            echo ""
+            echo "This creates every scenario for testing the Workload Health screen:"
+            echo ""
+            echo "NAMESPACES:"
+            echo "  test-healthy   - Healthy Deployments (nginx, redis) + StatefulSet"
+            echo "  test-failing   - CrashLoopBackOff, ImagePullBackOff, Pending, OOMKilled"
+            echo "  test-degraded  - High restarts, partial ready"
+            echo "  test-stateful  - StatefulSets (1 healthy, 1 failing)"
+            echo "  test-daemonset - DaemonSet"
+            echo "  test-pdb       - Deployment with PodDisruptionBudget"
+            echo "  test-mixed     - Mix of healthy and failing in same namespace"
+            echo ""
+            echo "POD STATES YOU'LL SEE:"
+            echo "  ● Running          - Healthy pods"
+            echo "  ✗ CrashLoopBackOff - Pods that keep crashing"
+            echo "  ✗ ImagePullBackOff - Invalid image reference"
+            echo "  ○ Pending          - Can't be scheduled (resource constraints)"
+            echo "  ✗ OOMKilled        - Out of memory kills"
+            echo "  ◐ High Restarts    - Pods with >5 restarts"
+            echo ""
+            echo "Wait ~30 seconds for pods to enter their error states, then run:"
+            echo "  cargo run --bin talos-pilot"
+            echo "  Press 'w' to view workload health"
+            ;;
+
         all)
             create_workloads healthy
             create_workloads crashloop
             create_workloads imagepull
             create_workloads pending
+            create_workloads oomkill
+            create_workloads highrestarts
+            create_workloads statefulset
+            create_workloads daemonset
             create_workloads pdb
+            create_workloads mixed
+            echo ""
+            log_success "Created all test workloads!"
+            echo ""
+            echo "Namespaces created:"
+            echo "  test-healthy   - Healthy Deployments and StatefulSet"
+            echo "  test-failing   - CrashLoopBackOff, ImagePullBackOff, Pending, OOMKilled"
+            echo "  test-degraded  - High restarts, partial ready"
+            echo "  test-stateful  - StatefulSets (healthy and failing)"
+            echo "  test-daemonset - DaemonSet"
+            echo "  test-pdb       - Deployment with PDB"
+            echo "  test-mixed     - Mix of healthy and failing"
+            echo ""
+            echo "Wait ~30 seconds for pods to enter their error states, then run:"
+            echo "  cargo run --bin talos-pilot"
+            echo "  Press 'w' to view workload health"
             ;;
 
         clean)
             log_info "Cleaning up test workloads..."
-            kubectl delete namespace test-healthy test-failing test-pdb 2>/dev/null || true
-            log_success "Cleaned up test namespaces"
+            kubectl delete namespace test-healthy test-failing test-degraded test-stateful test-daemonset test-pdb test-mixed 2>/dev/null || true
+            log_success "Cleaned up all test namespaces"
             ;;
 
         *)
             log_error "Unknown workload type: ${workload_type}"
-            echo "Available types: healthy, crashloop, imagepull, pending, pdb, all, clean"
+            echo "Available types:"
+            echo "  kitchen-sink - [RECOMMENDED] All scenarios + removes control plane taint"
+            echo "  healthy      - Healthy Deployments and StatefulSet"
+            echo "  crashloop    - CrashLoopBackOff deployment"
+            echo "  imagepull    - ImagePullBackOff deployment"
+            echo "  pending      - Pending pod (impossible resources)"
+            echo "  oomkill      - OOMKilled deployment"
+            echo "  highrestarts - High restart count deployment"
+            echo "  degraded     - Partially ready deployment"
+            echo "  statefulset  - StatefulSet examples"
+            echo "  daemonset    - DaemonSet example"
+            echo "  pdb          - Deployment with PodDisruptionBudget"
+            echo "  mixed        - Mixed healthy/failing namespace"
+            echo "  all          - Create all test workloads (no taint removal)"
+            echo "  clean        - Delete all test workloads"
             exit 1
             ;;
     esac
@@ -730,12 +1028,19 @@ PROFILES:
     cilium-kubespan     Cilium eBPF + KubeSpan (problematic combo for testing)
 
 WORKLOAD TYPES:
-    healthy             Create healthy nginx/redis deployments
-    crashloop           Create deployment that enters CrashLoopBackOff
-    imagepull           Create deployment with non-existent image
-    pending             Create pod with impossible resource requests
-    pdb                 Create deployment with restrictive PodDisruptionBudget
-    all                 Create all test workloads
+    kitchen-sink        [RECOMMENDED] All scenarios + removes control plane taint
+    healthy             Healthy Deployments and StatefulSet
+    crashloop           CrashLoopBackOff deployment
+    imagepull           ImagePullBackOff deployment
+    pending             Pending pod (impossible resources)
+    oomkill             OOMKilled deployment
+    highrestarts        High restart count deployment
+    degraded            Partially ready deployment
+    statefulset         StatefulSet examples (healthy + failing)
+    daemonset           DaemonSet example
+    pdb                 Deployment with PodDisruptionBudget
+    mixed               Mixed healthy/failing namespace
+    all                 Create all test workloads (no taint removal)
     clean               Delete all test workloads
 
 ENVIRONMENT VARIABLES:
@@ -758,8 +1063,8 @@ EXAMPLES:
     # Create the problematic Cilium + KubeSpan combo for testing warnings
     ./cluster.sh create cilium-kubespan
 
-    # Add test workloads
-    ./cluster.sh workloads all
+    # Add comprehensive test workloads (recommended for development)
+    ./cluster.sh workloads kitchen-sink
 
     # Check cluster status
     ./cluster.sh status

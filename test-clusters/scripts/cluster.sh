@@ -985,18 +985,47 @@ EOF
             # Give scheduler a moment to pick up the changes
             sleep 2
 
-            # Simple deployments without PDB (PDBs don't work on single-node clusters)
+            # Check node count to decide on PDB usage
+            local node_count
+            node_count=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
+            node_count=$(echo "${node_count}" | tr -d '[:space:]')
+
+            # Simple deployments
             kubectl create deployment web --image=nginx:alpine --replicas=3 -n test-drainable
             kubectl create deployment api --image=nginx:alpine --replicas=2 -n test-drainable
 
-            log_success "Created drainable workloads in test-drainable namespace"
-            echo ""
-            echo "These workloads CAN be drained:"
-            echo "  - web (3 replicas, no PDB)"
-            echo "  - api (2 replicas, no PDB)"
-            echo ""
-            echo "NOTE: PDBs are not used because they don't work on single-node clusters"
-            echo "(evicted pods can't reschedule when the only node is cordoned)"
+            if [[ "${node_count}" -gt 1 ]]; then
+                # Multi-node cluster: add PDB (pods can reschedule to other nodes)
+                log_info "Multi-node cluster detected (${node_count} nodes) - adding PDB"
+                cat <<EOF | kubectl apply -f -
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web-pdb
+  namespace: test-drainable
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: web
+EOF
+                log_success "Created drainable workloads with PDB in test-drainable namespace"
+                echo ""
+                echo "These workloads CAN be drained (multi-node cluster):"
+                echo "  - web (3 replicas, PDB maxUnavailable: 1)"
+                echo "  - api (2 replicas, no PDB)"
+            else
+                # Single-node cluster: no PDB (pods can't reschedule)
+                log_warn "Single-node cluster detected - skipping PDB"
+                log_success "Created drainable workloads (no PDB) in test-drainable namespace"
+                echo ""
+                echo "These workloads CAN be drained (single-node cluster):"
+                echo "  - web (3 replicas, no PDB)"
+                echo "  - api (2 replicas, no PDB)"
+                echo ""
+                echo "NOTE: PDBs skipped because single-node clusters can't reschedule"
+                echo "evicted pods when the only node is cordoned."
+            fi
             echo ""
             echo "Test drain with: press 'o' on the node, then 'd' for drain"
             echo ""

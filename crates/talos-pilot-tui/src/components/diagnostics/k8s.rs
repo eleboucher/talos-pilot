@@ -592,7 +592,7 @@ pub async fn drain_node_with_progress(
         }
 
         let mut attempts = 0;
-        let max_attempts = 5; // 5 attempts * 2 seconds = 10 seconds max per pod
+        let max_attempts = 15; // 15 attempts * 2 seconds = 30 seconds max per pod
         let mut success = false;
 
         while attempts < max_attempts && !success {

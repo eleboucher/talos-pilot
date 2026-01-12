@@ -10,7 +10,7 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell", "homebrew"]
 # A GitHub repo to push Homebrew formulas to
-tap = "Handfish/homebrew-tap"
+tap = "eleboucher/homebrew-tap"
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = [
     "aarch64-apple-darwin",
@@ -25,3 +25,14 @@ install-path = "CARGO_HOME"
 publish-jobs = ["homebrew"]
 # Whether to install an updater program
 install-updater = false
+
+[dist.dependencies.homebrew]
+protobuf = "*"
+
+[dist.dependencies.chocolatey]
+protoc = "*"
+
+[dist.dependencies.apt]
+libssl-dev = "*"
+pkg-config = "*"
+protobuf-compiler = "*"

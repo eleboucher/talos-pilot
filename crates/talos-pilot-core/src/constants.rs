@@ -66,9 +66,9 @@ mod tests {
 
     #[test]
     fn test_thresholds() {
-        assert!(HIGH_RESTART_THRESHOLD > 0);
-        assert!(MAX_LOG_ENTRIES > 0);
-        assert!(MAX_CAPTURE_SIZE > 0);
+        const { assert!(HIGH_RESTART_THRESHOLD > 0) };
+        const { assert!(MAX_LOG_ENTRIES > 0) };
+        const { assert!(MAX_CAPTURE_SIZE > 0) };
     }
 
     #[test]
@@ -82,8 +82,8 @@ mod tests {
 
     #[test]
     fn test_refresh_intervals_ordering() {
-        assert!(refresh_intervals::FAST < refresh_intervals::NORMAL);
-        assert!(refresh_intervals::NORMAL < refresh_intervals::SLOW);
-        assert!(refresh_intervals::SLOW < refresh_intervals::VERY_SLOW);
+        const { assert!(refresh_intervals::FAST < refresh_intervals::NORMAL) };
+        const { assert!(refresh_intervals::NORMAL < refresh_intervals::SLOW) };
+        const { assert!(refresh_intervals::SLOW < refresh_intervals::VERY_SLOW) };
     }
 }

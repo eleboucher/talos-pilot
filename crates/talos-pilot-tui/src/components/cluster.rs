@@ -529,8 +529,8 @@ impl ClusterComponent {
                 cluster.cpu_info = cpu_info;
 
                 // Fetch etcd status for header summary
-                if let Some(client) = &cluster.client {
-                    if let Ok(statuses) = client.etcd_status().await {
+                if let Some(client) = &cluster.client
+                    && let Ok(statuses) = client.etcd_status().await {
                         let total = cluster.etcd_members.len();
                         let healthy = statuses.len();
                         let quorum_needed = total / 2 + 1;
@@ -540,7 +540,6 @@ impl ClusterComponent {
                             has_quorum: healthy >= quorum_needed,
                         });
                     }
-                }
             }
         }
     }

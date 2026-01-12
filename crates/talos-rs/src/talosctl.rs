@@ -12,7 +12,7 @@ fn exec_talosctl(args: &[&str]) -> Result<String, TalosError> {
     let output = Command::new("talosctl")
         .args(args)
         .output()
-        .map_err(|e| TalosError::Io(e))?;
+        .map_err(TalosError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -31,7 +31,7 @@ async fn exec_talosctl_async(args: &[&str]) -> Result<String, TalosError> {
         .args(args)
         .output()
         .await
-        .map_err(|e| TalosError::Io(e))?;
+        .map_err(TalosError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

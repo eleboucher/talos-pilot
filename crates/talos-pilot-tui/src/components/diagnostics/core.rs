@@ -16,8 +16,8 @@ pub async fn run_system_checks(
     // Memory check
     match client.memory().await {
         Ok(mem_list) => {
-            if let Some(mem) = mem_list.first() {
-                if let Some(info) = &mem.meminfo {
+            if let Some(mem) = mem_list.first()
+                && let Some(info) = &mem.meminfo {
                     let usage_pct = info.usage_percent();
                     let used_gb = (info.mem_total - info.mem_available) as f64 / 1_073_741_824.0;
                     let total_gb = info.mem_total as f64 / 1_073_741_824.0;
@@ -31,7 +31,6 @@ pub async fn run_system_checks(
                         checks.push(DiagnosticCheck::pass("memory", "Memory", &msg));
                     }
                 }
-            }
         }
         Err(e) => {
             checks.push(
@@ -181,7 +180,7 @@ pub async fn run_kubernetes_checks(
 
             checks.push(
                 DiagnosticCheck::warn("pod_health", "Pod Health", &summary)
-                    .with_details(&details.trim_end()),
+                    .with_details(details.trim_end()),
             );
         } else {
             checks.push(DiagnosticCheck::pass(
@@ -249,14 +248,11 @@ pub async fn check_cni_health(client: &TalosClient) -> (bool, Option<String>) {
 
     // Check for any CNI config in /etc/cni/net.d/
     // If we find any config file, CNI is likely working
-    match client.read_file("/etc/cni/net.d").await {
-        Ok(content) => {
-            // If the directory exists and has content, some CNI is configured
-            if !content.is_empty() {
-                return (true, None);
-            }
+    if let Ok(content) = client.read_file("/etc/cni/net.d").await {
+        // If the directory exists and has content, some CNI is configured
+        if !content.is_empty() {
+            return (true, None);
         }
-        Err(_) => {}
     }
 
     // No CNI config files found
@@ -339,8 +335,8 @@ pub async fn run_certificate_checks(
     match client.kubeconfig().await {
         Ok(kubeconfig_yaml) => {
             // Parse kubeconfig YAML to extract client certificate
-            if let Ok(kc) = serde_yaml::from_str::<serde_yaml::Value>(&kubeconfig_yaml) {
-                if let Some(users) = kc.get("users").and_then(|u| u.as_sequence()) {
+            if let Ok(kc) = serde_yaml::from_str::<serde_yaml::Value>(&kubeconfig_yaml)
+                && let Some(users) = kc.get("users").and_then(|u| u.as_sequence()) {
                     for user in users {
                         if let Some(user_data) = user.get("user") {
                             // Check for client-certificate-data (base64 encoded PEM)
@@ -374,7 +370,6 @@ pub async fn run_certificate_checks(
                         }
                     }
                 }
-            }
         }
         Err(e) => {
             // kubeconfig may not be available yet during cluster bootstrap

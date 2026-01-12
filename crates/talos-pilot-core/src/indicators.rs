@@ -180,7 +180,7 @@ impl From<ConnectionState> for HealthIndicator {
 }
 
 /// Quorum state for clustered services (etcd, etc.)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum QuorumState {
     /// Cluster has full quorum - all members healthy
     Healthy,
@@ -189,6 +189,7 @@ pub enum QuorumState {
     /// Cluster has lost quorum - critical
     NoQuorum { healthy: usize, total: usize },
     /// Unknown state (loading or error)
+    #[default]
     Unknown,
 }
 
@@ -247,11 +248,6 @@ impl HasHealth for QuorumState {
     }
 }
 
-impl Default for QuorumState {
-    fn default() -> Self {
-        QuorumState::Unknown
-    }
-}
 
 /// Safety status for operations that may have risks
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

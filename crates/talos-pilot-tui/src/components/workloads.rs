@@ -554,11 +554,10 @@ impl WorkloadHealthComponent {
         self.state.set_data(data);
 
         // Reset selection if needed
-        if let Some(d) = self.data() {
-            if !d.namespaces.is_empty() && self.selected_namespace >= d.namespaces.len() {
+        if let Some(d) = self.data()
+            && !d.namespaces.is_empty() && self.selected_namespace >= d.namespaces.len() {
                 self.selected_namespace = 0;
             }
-        }
         self.table_state.select(Some(self.selected_namespace));
 
         tracing::info!(
@@ -880,6 +879,7 @@ impl WorkloadHealthComponent {
     }
 
     /// Collect drill-down row data for the selected namespace
+    #[allow(clippy::type_complexity)]
     fn collect_drill_down_data(
         &self,
     ) -> Option<(String, Vec<(String, String, String, String, String, Color)>)> {

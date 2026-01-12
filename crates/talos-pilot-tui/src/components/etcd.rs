@@ -600,8 +600,8 @@ impl Component for EtcdComponent {
             }
             KeyCode::Enter => {
                 // View etcd logs for selected member
-                if let Some(data) = self.data() {
-                    if let Some(member) = data.members.selected() {
+                if let Some(data) = self.data()
+                    && let Some(member) = data.members.selected() {
                         let node = member.info.hostname.clone();
                         let etcd_vec = vec!["etcd".to_string()];
                         return Ok(Some(Action::ShowMultiLogs(
@@ -611,7 +611,6 @@ impl Component for EtcdComponent {
                             etcd_vec,
                         )));
                     }
-                }
                 Ok(None)
             }
             _ => Ok(None),
@@ -638,14 +637,13 @@ impl Component for EtcdComponent {
         }
 
         // Show error state (only if no data to display)
-        if let Some(err) = self.state.error() {
-            if !self.state.has_data() {
+        if let Some(err) = self.state.error()
+            && !self.state.has_data() {
                 let error = Paragraph::new(format!("Error: {}", err))
                     .style(Style::default().fg(Color::Red));
                 frame.render_widget(error, area);
                 return Ok(());
             }
-        }
 
         // Get data for layout calculations
         let Some(data) = self.data() else {

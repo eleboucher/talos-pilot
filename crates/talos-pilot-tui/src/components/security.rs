@@ -180,8 +180,8 @@ impl SecurityComponent {
 
                 if let Some(context) = config.current_context() {
                     // Parse client certificate
-                    if let Ok(pem_data) = context.client_cert_pem() {
-                        if let Ok(cert_info) = pki::parse_certificate("talosconfig", &pem_data) {
+                    if let Ok(pem_data) = context.client_cert_pem()
+                        && let Ok(cert_info) = pki::parse_certificate("talosconfig", &pem_data) {
                             // Extract RBAC role from subject
                             // Subject format is like "O=os:admin" - extract just the role part
                             let role = cert_info
@@ -194,14 +194,12 @@ impl SecurityComponent {
                             pki.rbac_enabled = true;
                             pki.client_certs.push(cert_info);
                         }
-                    }
 
                     // Parse CA certificate
-                    if let Ok(pem_data) = context.ca_pem() {
-                        if let Ok(cert_info) = pki::parse_certificate("Talos CA", &pem_data) {
+                    if let Ok(pem_data) = context.ca_pem()
+                        && let Ok(cert_info) = pki::parse_certificate("Talos CA", &pem_data) {
                             pki.cas.push(cert_info);
                         }
-                    }
                 }
             }
             Err(e) => {
@@ -214,31 +212,28 @@ impl SecurityComponent {
 
     /// Load kubeconfig certificates via client (static method)
     async fn load_kubeconfig_certs(data: &mut SecurityData, client: &TalosClient) {
-        if let Ok(kubeconfig_yaml) = client.kubeconfig().await {
-            if let Ok(kc) = serde_yaml::from_str::<serde_yaml::Value>(&kubeconfig_yaml) {
+        if let Ok(kubeconfig_yaml) = client.kubeconfig().await
+            && let Ok(kc) = serde_yaml::from_str::<serde_yaml::Value>(&kubeconfig_yaml) {
                 // Parse kubeconfig CA
                 if let Some(clusters) = kc.get("clusters").and_then(|c| c.as_sequence()) {
                     for cluster in clusters {
-                        if let Some(cluster_data) = cluster.get("cluster") {
-                            if let Some(ca_data) = cluster_data
+                        if let Some(cluster_data) = cluster.get("cluster")
+                            && let Some(ca_data) = cluster_data
                                 .get("certificate-authority-data")
                                 .and_then(|c| c.as_str())
-                            {
-                                if let Ok(cert_info) =
+                                && let Ok(cert_info) =
                                     pki::parse_base64_certificate("Kubernetes CA", ca_data)
                                 {
                                     data.pki_status.cas.push(cert_info);
                                 }
-                            }
-                        }
                     }
                 }
 
                 // Parse kubeconfig client cert
                 if let Some(users) = kc.get("users").and_then(|u| u.as_sequence()) {
                     for user in users {
-                        if let Some(user_data) = user.get("user") {
-                            if let Some(cert_data) = user_data
+                        if let Some(user_data) = user.get("user")
+                            && let Some(cert_data) = user_data
                                 .get("client-certificate-data")
                                 .and_then(|c| c.as_str())
                             {
@@ -249,11 +244,9 @@ impl SecurityComponent {
                                 }
                                 break;
                             }
-                        }
                     }
                 }
             }
-        }
     }
 
     /// Load encryption status from node via talosctl (static method)
@@ -485,11 +478,10 @@ impl SecurityComponent {
             };
 
             // Skip headers (need to re-borrow data)
-            if let Some(d) = self.data() {
-                if d.items[new_sel].kind != SecurityItemKind::SectionHeader {
+            if let Some(d) = self.data()
+                && d.items[new_sel].kind != SecurityItemKind::SectionHeader {
                     break;
                 }
-            }
 
             // Prevent infinite loop
             if new_sel == self.selected {
@@ -514,11 +506,10 @@ impl SecurityComponent {
             new_sel = (new_sel + 1) % items_len;
 
             // Skip headers (need to re-borrow data)
-            if let Some(d) = self.data() {
-                if d.items[new_sel].kind != SecurityItemKind::SectionHeader {
+            if let Some(d) = self.data()
+                && d.items[new_sel].kind != SecurityItemKind::SectionHeader {
                     break;
                 }
-            }
 
             // Prevent infinite loop
             if new_sel == self.selected {
@@ -749,8 +740,8 @@ impl SecurityComponent {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        if let Some(item) = self.selected_item() {
-            if let Some(details) = &item.details {
+        if let Some(item) = self.selected_item()
+            && let Some(details) = &item.details {
                 let lines: Vec<Line> = details
                     .lines()
                     .map(|l| Line::from(Span::styled(l, Style::default().fg(Color::White))))
@@ -758,6 +749,5 @@ impl SecurityComponent {
                 let content = Paragraph::new(lines);
                 frame.render_widget(content, inner);
             }
-        }
     }
 }

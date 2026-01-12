@@ -78,10 +78,7 @@ fn check_flannel_pods(
 async fn check_br_netfilter(client: &TalosClient, ctx: &DiagnosticContext) -> DiagnosticCheck {
     // Check by reading /proc/sys/net/bridge/bridge-nf-call-iptables
     // If it exists and contains "1", br_netfilter is loaded
-    let br_netfilter_loaded = match client.is_br_netfilter_loaded().await {
-        Ok(loaded) => loaded,
-        Err(_) => false,
-    };
+    let br_netfilter_loaded = client.is_br_netfilter_loaded().await.unwrap_or_default();
 
     if br_netfilter_loaded {
         DiagnosticCheck::pass("br_netfilter", "br_netfilter", "Loaded")

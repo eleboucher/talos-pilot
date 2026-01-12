@@ -666,7 +666,7 @@ impl TalosClient {
                 .map(|p| ProcessInfo {
                     pid: p.pid,
                     ppid: p.ppid,
-                    state: ProcessState::from_str(&p.state),
+                    state: ProcessState::parse(&p.state),
                     threads: p.threads,
                     cpu_time: p.cpu_time,
                     virtual_memory: p.virtual_memory,
@@ -815,10 +815,10 @@ impl TalosClient {
             match chunk {
                 Ok(data) => {
                     // Check for errors in the metadata
-                    if let Some(metadata) = &data.metadata {
-                        if !metadata.error.is_empty() {
-                            return Err(TalosError::Connection(metadata.error.clone()));
-                        }
+                    if let Some(metadata) = &data.metadata
+                        && !metadata.error.is_empty()
+                    {
+                        return Err(TalosError::Connection(metadata.error.clone()));
                     }
                     if let Ok(text) = String::from_utf8(data.bytes) {
                         output.push_str(&text);
@@ -1940,7 +1940,7 @@ pub enum ProcessState {
 
 impl ProcessState {
     /// Parse state from string (e.g., "R", "S", "D", "Z")
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.chars().next() {
             Some('R') => ProcessState::Running,
             Some('S') => ProcessState::Sleeping,

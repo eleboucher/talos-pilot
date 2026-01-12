@@ -7,7 +7,7 @@ use crate::{HasHealth, HealthIndicator};
 use serde::{Deserialize, Serialize};
 
 /// Status of a diagnostic check
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CheckStatus {
     /// Check passed
     Pass,
@@ -16,15 +16,10 @@ pub enum CheckStatus {
     /// Check failed - action may be available
     Fail,
     /// Status unknown or still checking
+    #[default]
     Unknown,
     /// Currently checking
     Checking,
-}
-
-impl Default for CheckStatus {
-    fn default() -> Self {
-        CheckStatus::Unknown
-    }
 }
 
 impl HasHealth for CheckStatus {

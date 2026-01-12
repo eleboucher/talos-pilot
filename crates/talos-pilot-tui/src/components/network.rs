@@ -652,7 +652,7 @@ impl NetworkStatsComponent {
         let source: Vec<_> = if self.show_all_connections || self.view_mode == ViewMode::Interfaces
         {
             // Show all connections
-            data.connections.iter().cloned().collect()
+            data.connections.to_vec()
         } else {
             // In connections view, use interface-filtered list
             self.filtered_connections.clone()
@@ -875,7 +875,7 @@ impl NetworkStatsComponent {
         let lines: Vec<String> = if let Some((start, end)) = self.conn_selection_range() {
             // Yank all selected connections
             (start..=end)
-                .filter_map(|idx| conns.get(idx).map(|c| Self::format_connection(c)))
+                .filter_map(|idx| conns.get(idx).map(Self::format_connection))
                 .collect()
         } else {
             // Yank current connection only
@@ -1855,7 +1855,7 @@ impl NetworkStatsComponent {
         };
 
         // Format namespace
-        let netns_info = conn.netns.as_ref().map(|ns| ns.as_str()).unwrap_or("host");
+        let netns_info = conn.netns.as_deref().unwrap_or("host");
 
         let mut lines = vec![
             Line::from(vec![
@@ -2779,12 +2779,11 @@ impl Component for NetworkStatsComponent {
         }
 
         // If output pane is shown, Esc closes it
-        if self.show_output_pane {
-            if matches!(key.code, KeyCode::Esc) {
+        if self.show_output_pane
+            && matches!(key.code, KeyCode::Esc) {
                 self.show_output_pane = false;
                 return Ok(None);
             }
-        }
 
         // If there's a pending confirmation, handle that first
         if self.pending_action.is_some() {
@@ -2801,11 +2800,10 @@ impl Component for NetworkStatsComponent {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
             // Clear old status messages (after 3 seconds)
-            if let Some((_, time)) = &self.status_message {
-                if time.elapsed() > std::time::Duration::from_secs(3) {
+            if let Some((_, time)) = &self.status_message
+                && time.elapsed() > std::time::Duration::from_secs(3) {
                     self.status_message = None;
                 }
-            }
 
             // Poll packet capture for new data
             if self.is_capturing() {
@@ -2813,14 +2811,13 @@ impl Component for NetworkStatsComponent {
             }
 
             // Check for auto-refresh
-            if self.auto_refresh && !self.state.is_loading() {
-                if let Some(last) = self.state.last_refresh() {
+            if self.auto_refresh && !self.state.is_loading()
+                && let Some(last) = self.state.last_refresh() {
                     let interval = std::time::Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
                     if last.elapsed() >= interval {
                         return Ok(Some(Action::Refresh));
                     }
                 }
-            }
         }
         Ok(None)
     }

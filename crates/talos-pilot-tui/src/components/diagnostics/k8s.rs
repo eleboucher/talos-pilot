@@ -597,17 +597,16 @@ pub async fn drain_node_with_progress(
         let namespace = pod.metadata.namespace.clone().unwrap_or_default();
 
         // Skip mirror pods (created by kubelet, not managed by API server)
-        if let Some(annotations) = &pod.metadata.annotations {
-            if annotations.contains_key("kubernetes.io/config.mirror") {
+        if let Some(annotations) = &pod.metadata.annotations
+            && annotations.contains_key("kubernetes.io/config.mirror") {
                 continue;
             }
-        }
 
         // Check if pod is owned by a controller (managed)
         let owner_refs = pod.metadata.owner_references.as_ref();
         let is_daemonset_pod =
-            owner_refs.map_or(false, |refs| refs.iter().any(|r| r.kind == "DaemonSet"));
-        let is_managed = owner_refs.map_or(false, |refs| {
+            owner_refs.is_some_and(|refs| refs.iter().any(|r| r.kind == "DaemonSet"));
+        let is_managed = owner_refs.is_some_and(|refs| {
             refs.iter().any(|r| {
                 matches!(
                     r.kind.as_str(),
@@ -616,17 +615,16 @@ pub async fn drain_node_with_progress(
             })
         });
 
-        if is_daemonset_pod {
-            if options.ignore_daemonsets {
+        if is_daemonset_pod
+            && options.ignore_daemonsets {
                 _skipped_daemonset += 1;
                 continue;
             }
             // DaemonSet pods can't be evicted without ignoring them
-        }
 
         // Check for local storage (emptyDir)
-        let has_emptydir = pod.spec.as_ref().map_or(false, |spec| {
-            spec.volumes.as_ref().map_or(false, |volumes| {
+        let has_emptydir = pod.spec.as_ref().is_some_and(|spec| {
+            spec.volumes.as_ref().is_some_and(|volumes| {
                 volumes.iter().any(|v| v.empty_dir.is_some())
             })
         });

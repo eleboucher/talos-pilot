@@ -44,9 +44,7 @@ pub struct NodeEtcdInfo {
 
 impl NodeEtcdInfo {
     fn safety_status(&self) -> SafetyStatus {
-        if !self.is_member {
-            SafetyStatus::Safe
-        } else if self.quorum_maintained {
+        if !self.is_member || self.quorum_maintained {
             SafetyStatus::Safe
         } else if self.total_members == 1 {
             SafetyStatus::Unsafe("Single etcd member - quorum will be lost".to_string())
@@ -1055,7 +1053,7 @@ impl NodeOperationsComponent {
                 Style::default().fg(Color::Yellow),
             )]));
 
-            if let Some(ref etcd) = data.and_then(|d| d.etcd_info.as_ref()) {
+            if let Some(etcd) = data.and_then(|d| d.etcd_info.as_ref()) {
                 let (indicator, color) = etcd.safety_status().indicator_with_color();
                 let role = if etcd.is_leader { "leader" } else { "member" };
 
@@ -1108,7 +1106,7 @@ impl NodeOperationsComponent {
             Style::default().fg(Color::Yellow),
         )]));
 
-        if let Some(ref pdb) = data.and_then(|d| d.pdb_info.as_ref()) {
+        if let Some(pdb) = data.and_then(|d| d.pdb_info.as_ref()) {
             let drain_safety = data
                 .map(|d| &d.drain_safety)
                 .unwrap_or(&SafetyStatus::Unknown);
@@ -1307,11 +1305,10 @@ impl Component for NodeOperationsComponent {
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         // Poll operation on every tick while executing
-        if matches!(action, Action::Tick) {
-            if matches!(self.operation_state, OperationState::Executing(_, _)) {
+        if matches!(action, Action::Tick)
+            && matches!(self.operation_state, OperationState::Executing(_, _)) {
                 self.poll_operation();
             }
-        }
         Ok(None)
     }
 

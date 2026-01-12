@@ -223,14 +223,13 @@ impl LifecycleComponent {
         match client.version().await {
             Ok(versions) => {
                 // Get context name from first node
-                if versions.first().is_some() {
-                    if data.context_name.is_empty() {
+                if !versions.is_empty()
+                    && data.context_name.is_empty() {
                         // Try to get from talosconfig
                         if let Ok(config) = talos_rs::TalosConfig::load_default() {
                             data.context_name = config.context;
                         }
                     }
-                }
 
                 data.versions = versions;
             }
@@ -354,11 +353,7 @@ impl LifecycleComponent {
                 };
 
                 let quorum_needed = total / 2 + 1;
-                let can_lose = if healthy >= quorum_needed {
-                    healthy - quorum_needed
-                } else {
-                    0
-                };
+                let can_lose = healthy.saturating_sub(quorum_needed);
 
                 Some(EtcdQuorumInfo {
                     total_members: total,

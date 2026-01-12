@@ -186,11 +186,10 @@ impl RollingOperationsComponent {
                 if let Some(removed) = removed_order {
                     // Renumber nodes with higher order numbers
                     for n in &mut self.nodes {
-                        if let Some(order) = n.selection_order {
-                            if order > removed {
+                        if let Some(order) = n.selection_order
+                            && order > removed {
                                 n.selection_order = Some(order - 1);
                             }
-                        }
                     }
                 }
             } else {
@@ -296,6 +295,7 @@ impl RollingOperationsComponent {
 }
 
 /// Run the rolling operation across all selected nodes
+#[allow(clippy::too_many_arguments)]
 async fn run_rolling_operation(
     progress: Arc<Mutex<RollingProgress>>,
     nodes: Vec<RollingNodeInfo>,
@@ -598,11 +598,10 @@ impl Component for RollingOperationsComponent {
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        if matches!(action, Action::Tick) {
-            if matches!(self.state, RollingState::InProgress { .. }) {
+        if matches!(action, Action::Tick)
+            && matches!(self.state, RollingState::InProgress { .. }) {
                 self.poll_operation();
             }
-        }
         Ok(None)
     }
 
@@ -819,6 +818,7 @@ impl RollingOperationsComponent {
         frame.render_widget(paragraph, area);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_completed(
         &self,
         frame: &mut Frame,

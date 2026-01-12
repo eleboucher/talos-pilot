@@ -102,12 +102,12 @@ pub fn get_service_info(port: u16) -> Option<&'static ServicePort> {
 
 /// Check if a port is a Talos-specific service
 pub fn is_talos_port(port: u16) -> bool {
-    get_service_info(port).map_or(false, |sp| sp.is_talos)
+    get_service_info(port).is_some_and(|sp| sp.is_talos)
 }
 
 /// Check if a port is a control plane service
 pub fn is_controlplane_port(port: u16) -> bool {
-    get_service_info(port).map_or(false, |sp| sp.is_controlplane)
+    get_service_info(port).is_some_and(|sp| sp.is_controlplane)
 }
 
 /// Connection direction

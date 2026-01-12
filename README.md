@@ -7,6 +7,8 @@ A terminal UI (TUI) for managing and monitoring [Talos Linux](https://www.talos.
 ![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+https://github.com/Handfish/talos-pilot/raw/main/assets/initialDemo.mp4
+
 ## Why talos-pilot?
 
 Talos Linux removes SSH access for security, replacing it with an API-driven management model. While `talosctl` is powerful, it requires memorizing many subcommands. **talos-pilot** provides:

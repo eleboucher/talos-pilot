@@ -146,9 +146,9 @@ pub fn parse_certificate(name: &str, pem_data: &[u8]) -> Result<CertificateInfo,
 
     // Convert to chrono DateTime
     let not_before_chrono =
-        DateTime::from_timestamp(not_before.unix_timestamp(), 0).unwrap_or_else(|| Utc::now());
+        DateTime::from_timestamp(not_before.unix_timestamp(), 0).unwrap_or_else(Utc::now);
     let not_after_chrono =
-        DateTime::from_timestamp(not_after.unix_timestamp(), 0).unwrap_or_else(|| Utc::now());
+        DateTime::from_timestamp(not_after.unix_timestamp(), 0).unwrap_or_else(Utc::now);
 
     // Calculate days remaining
     let now = Utc::now();

@@ -408,25 +408,21 @@ impl DiagnosticsComponent {
         let timeout = std::time::Duration::from_secs(15);
 
         // Fetch platform info first
-        if let Ok(versions) = client.version().await {
-            if let Some(v) = versions.first() {
-                if let Some(data) = self.data_mut() {
+        if let Ok(versions) = client.version().await
+            && let Some(v) = versions.first()
+                && let Some(data) = self.data_mut() {
                     data.context.platform = v.platform.clone();
                     data.context.is_container = v.platform == "container";
                     tracing::info!("Detected platform: {}", data.context.platform);
                 }
-            }
-        }
 
         // Get CPU count for load threshold scaling
-        if let Ok(cpu_info) = client.cpu_info().await {
-            if let Some(info) = cpu_info.first() {
-                if let Some(data) = self.data_mut() {
+        if let Ok(cpu_info) = client.cpu_info().await
+            && let Some(info) = cpu_info.first()
+                && let Some(data) = self.data_mut() {
                     data.context.cpu_count = info.cpu_count.max(1);
                     tracing::info!("Detected {} CPUs", data.context.cpu_count);
                 }
-            }
-        }
 
         // Try to create K8s client once for all K8s-based checks
         // For worker nodes, use the control plane endpoint to fetch kubeconfig
@@ -828,8 +824,7 @@ impl DiagnosticsComponent {
         let max_line_len = content_lines.iter().map(|l| l.len()).max().unwrap_or(40);
 
         let dialog_width = (max_line_len as u16 + 6)
-            .min(80)
-            .max(50)
+            .clamp(50, 80)
             .min(area.width.saturating_sub(4));
         let dialog_height = (content_lines.len() as u16 + 6)
             .min(20)
@@ -906,8 +901,8 @@ impl Component for DiagnosticsComponent {
                 KeyCode::Enter => {
                     if is_host_command {
                         if self.confirmation_selection == 0 {
-                            if let Some(pending) = &self.pending_action {
-                                if let FixAction::HostCommand { command, .. } = &pending.fix.action
+                            if let Some(pending) = &self.pending_action
+                                && let FixAction::HostCommand { command, .. } = &pending.fix.action
                                 {
                                     // Spawn a thread to copy to clipboard and keep it alive
                                     // This prevents the "clipboard dropped quickly" warning
@@ -923,7 +918,6 @@ impl Component for DiagnosticsComponent {
                                     });
                                     self.copy_feedback_until = Some(Instant::now());
                                 }
-                            }
                         } else {
                             self.show_confirmation = false;
                             self.pending_action = None;
@@ -974,14 +968,11 @@ impl Component for DiagnosticsComponent {
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        match action {
-            Action::Tick => {
-                let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-                if self.state.should_auto_refresh(self.auto_refresh, interval) {
-                    return Ok(Some(Action::Refresh));
-                }
+        if let Action::Tick = action {
+            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
+            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+                return Ok(Some(Action::Refresh));
             }
-            _ => {}
         }
         Ok(None)
     }

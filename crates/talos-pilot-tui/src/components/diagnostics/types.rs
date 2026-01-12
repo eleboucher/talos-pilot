@@ -346,7 +346,7 @@ impl PodHealthInfo {
 }
 
 /// Context passed to diagnostic providers
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DiagnosticContext {
     /// Platform type (e.g., "container", "metal", "aws")
     pub platform: String,

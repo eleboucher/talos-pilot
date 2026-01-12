@@ -73,6 +73,17 @@ impl<T> AsyncState<T> {
         }
     }
 
+    /// Create a new async state with initial data (not loading)
+    pub fn with_data(data: T) -> Self {
+        Self {
+            data: Some(data),
+            loading: false,
+            error: None,
+            last_refresh: Some(Instant::now()),
+            retry_count: 0,
+        }
+    }
+
     /// Check if currently loading
     pub fn is_loading(&self) -> bool {
         self.loading
@@ -147,6 +158,18 @@ impl<T> AsyncState<T> {
         self.retry_count += 1;
         self.error = Some(format!("{} (retry {})", error.to_string(), self.retry_count));
         self.loading = false;
+    }
+
+    /// Mark the state as loaded without replacing data
+    ///
+    /// Useful when data is updated in-place via data_mut() rather than
+    /// being replaced with set_data(). Clears loading and error state,
+    /// resets retry count, and updates last_refresh.
+    pub fn mark_loaded(&mut self) {
+        self.loading = false;
+        self.error = None;
+        self.retry_count = 0;
+        self.last_refresh = Some(Instant::now());
     }
 
     /// Clear the error

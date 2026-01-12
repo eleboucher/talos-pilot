@@ -26,8 +26,8 @@ use ratatui::{
     Frame,
 };
 use std::collections::HashMap;
-use std::time::Instant;
-use talos_pilot_core::{HasHealth, HealthIndicator};
+use std::time::Duration;
+use talos_pilot_core::{AsyncState, HasHealth, HealthIndicator};
 
 /// Health state of a workload or pod
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -162,21 +162,28 @@ const AUTO_REFRESH_INTERVAL_SECS: u64 = 10;
 /// High restart threshold
 const HIGH_RESTART_THRESHOLD: i32 = 5;
 
-/// Workload Health Component
-pub struct WorkloadHealthComponent {
-    /// Kubernetes client
-    k8s_client: Option<Client>,
-
+/// Data loaded asynchronously for the workloads component
+#[derive(Debug, Clone, Default)]
+pub struct WorkloadsData {
     /// Namespace summaries (sorted: issues first)
-    namespaces: Vec<NamespaceSummary>,
+    pub namespaces: Vec<NamespaceSummary>,
 
     /// Global summary counts
-    total_deployments: usize,
-    total_statefulsets: usize,
-    total_daemonsets: usize,
-    total_pods_healthy: usize,
-    total_pods_degraded: usize,
-    total_pods_failing: usize,
+    pub total_deployments: usize,
+    pub total_statefulsets: usize,
+    pub total_daemonsets: usize,
+    pub total_pods_healthy: usize,
+    pub total_pods_degraded: usize,
+    pub total_pods_failing: usize,
+}
+
+/// Workload Health Component
+pub struct WorkloadHealthComponent {
+    /// Async state for loaded data
+    state: AsyncState<WorkloadsData>,
+
+    /// Kubernetes client
+    k8s_client: Option<Client>,
 
     /// Selected namespace index
     selected_namespace: usize,
@@ -188,16 +195,6 @@ pub struct WorkloadHealthComponent {
     /// Table state for rendering
     table_state: TableState,
 
-    /// Scroll offset for the main list
-    scroll_offset: usize,
-
-    /// Loading state
-    loading: bool,
-    /// Error message
-    error: Option<String>,
-
-    /// Last refresh time
-    last_refresh: Option<Instant>,
     /// Auto-refresh enabled
     auto_refresh: bool,
 }
@@ -214,24 +211,19 @@ impl WorkloadHealthComponent {
         table_state.select(Some(0));
 
         Self {
+            state: AsyncState::new(),
             k8s_client: None,
-            namespaces: Vec::new(),
-            total_deployments: 0,
-            total_statefulsets: 0,
-            total_daemonsets: 0,
-            total_pods_healthy: 0,
-            total_pods_degraded: 0,
-            total_pods_failing: 0,
             selected_namespace: 0,
             selected_item: 0,
             drill_down: false,
             table_state,
-            scroll_offset: 0,
-            loading: true,
-            error: None,
-            last_refresh: None,
             auto_refresh: true,
         }
+    }
+
+    /// Access loaded data immutably
+    fn data(&self) -> Option<&WorkloadsData> {
+        self.state.data()
     }
 
     /// Set the Kubernetes client
@@ -241,8 +233,7 @@ impl WorkloadHealthComponent {
 
     /// Set an error message
     pub fn set_error(&mut self, error: String) {
-        self.error = Some(error);
-        self.loading = false;
+        self.state.set_error(error);
     }
 
     /// Refresh workload data from the cluster
@@ -252,8 +243,7 @@ impl WorkloadHealthComponent {
             return Ok(());
         };
 
-        self.loading = true;
-        self.error = None;
+        self.state.start_loading();
 
         // Fetch all workloads in parallel
         let deployments_api: Api<Deployment> = Api::all(client.clone());
@@ -306,8 +296,15 @@ impl WorkloadHealthComponent {
         // Build namespace map
         let mut ns_map: HashMap<String, NamespaceSummary> = HashMap::new();
 
+        // Track counts locally
+        let total_deployments = deployments.items.len();
+        let total_statefulsets = statefulsets.items.len();
+        let total_daemonsets = daemonsets.items.len();
+        let mut total_pods_healthy = 0usize;
+        let mut total_pods_degraded = 0usize;
+        let mut total_pods_failing = 0usize;
+
         // Process deployments
-        self.total_deployments = deployments.items.len();
         for deploy in deployments.items {
             let ns = deploy
                 .metadata
@@ -352,7 +349,6 @@ impl WorkloadHealthComponent {
         }
 
         // Process statefulsets
-        self.total_statefulsets = statefulsets.items.len();
         for sts in statefulsets.items {
             let ns = sts
                 .metadata
@@ -396,7 +392,6 @@ impl WorkloadHealthComponent {
         }
 
         // Process daemonsets
-        self.total_daemonsets = daemonsets.items.len();
         for ds in daemonsets.items {
             let ns = ds
                 .metadata
@@ -440,10 +435,6 @@ impl WorkloadHealthComponent {
         }
 
         // Process pods - find problematic ones
-        self.total_pods_healthy = 0;
-        self.total_pods_degraded = 0;
-        self.total_pods_failing = 0;
-
         for pod in pods.items {
             let ns = pod
                 .metadata
@@ -477,13 +468,13 @@ impl WorkloadHealthComponent {
             // Track global counts
             match &issue {
                 Some(i) => match i.severity() {
-                    HealthState::Failing => self.total_pods_failing += 1,
-                    HealthState::Degraded | HealthState::Pending => self.total_pods_degraded += 1,
-                    HealthState::Healthy => self.total_pods_healthy += 1,
+                    HealthState::Failing => total_pods_failing += 1,
+                    HealthState::Degraded | HealthState::Pending => total_pods_degraded += 1,
+                    HealthState::Healthy => total_pods_healthy += 1,
                 },
                 None => {
                     if phase == "Running" || phase == "Succeeded" {
-                        self.total_pods_healthy += 1;
+                        total_pods_healthy += 1;
                     }
                 }
             }
@@ -550,22 +541,34 @@ impl WorkloadHealthComponent {
             a.health.cmp(&b.health).then_with(|| a.name.cmp(&b.name))
         });
 
-        self.namespaces = namespaces;
-        self.loading = false;
-        self.last_refresh = Some(Instant::now());
+        // Build and set data
+        let data = WorkloadsData {
+            namespaces,
+            total_deployments,
+            total_statefulsets,
+            total_daemonsets,
+            total_pods_healthy,
+            total_pods_degraded,
+            total_pods_failing,
+        };
+
+        let ns_count = data.namespaces.len();
+        self.state.set_data(data);
 
         // Reset selection if needed
-        if !self.namespaces.is_empty() && self.selected_namespace >= self.namespaces.len() {
-            self.selected_namespace = 0;
+        if let Some(d) = self.data() {
+            if !d.namespaces.is_empty() && self.selected_namespace >= d.namespaces.len() {
+                self.selected_namespace = 0;
+            }
         }
         self.table_state.select(Some(self.selected_namespace));
 
         tracing::info!(
             "Loaded {} namespaces, {} deployments, {} statefulsets, {} daemonsets",
-            self.namespaces.len(),
-            self.total_deployments,
-            self.total_statefulsets,
-            self.total_daemonsets
+            ns_count,
+            total_deployments,
+            total_statefulsets,
+            total_daemonsets
         );
 
         Ok(())
@@ -676,36 +679,45 @@ impl WorkloadHealthComponent {
     /// Navigate to previous item
     fn select_prev(&mut self) {
         if self.drill_down {
-            if let Some(ns) = self.namespaces.get(self.selected_namespace) {
-                let total = ns.workloads.len() + ns.problem_pods.len();
-                if total > 0 {
-                    self.selected_item = self.selected_item.saturating_sub(1);
-                }
+            let total = self.data()
+                .and_then(|d| d.namespaces.get(self.selected_namespace))
+                .map(|ns| ns.workloads.len() + ns.problem_pods.len())
+                .unwrap_or(0);
+            if total > 0 {
+                self.selected_item = self.selected_item.saturating_sub(1);
             }
-        } else if !self.namespaces.is_empty() {
-            self.selected_namespace = self.selected_namespace.saturating_sub(1);
-            self.table_state.select(Some(self.selected_namespace));
+        } else {
+            let ns_count = self.data().map(|d| d.namespaces.len()).unwrap_or(0);
+            if ns_count > 0 {
+                self.selected_namespace = self.selected_namespace.saturating_sub(1);
+                self.table_state.select(Some(self.selected_namespace));
+            }
         }
     }
 
     /// Navigate to next item
     fn select_next(&mut self) {
         if self.drill_down {
-            if let Some(ns) = self.namespaces.get(self.selected_namespace) {
-                let total = ns.workloads.len() + ns.problem_pods.len();
-                if total > 0 {
-                    self.selected_item = (self.selected_item + 1).min(total - 1);
-                }
+            let total = self.data()
+                .and_then(|d| d.namespaces.get(self.selected_namespace))
+                .map(|ns| ns.workloads.len() + ns.problem_pods.len())
+                .unwrap_or(0);
+            if total > 0 {
+                self.selected_item = (self.selected_item + 1).min(total - 1);
             }
-        } else if !self.namespaces.is_empty() {
-            self.selected_namespace = (self.selected_namespace + 1).min(self.namespaces.len() - 1);
-            self.table_state.select(Some(self.selected_namespace));
+        } else {
+            let ns_count = self.data().map(|d| d.namespaces.len()).unwrap_or(0);
+            if ns_count > 0 {
+                self.selected_namespace = (self.selected_namespace + 1).min(ns_count - 1);
+                self.table_state.select(Some(self.selected_namespace));
+            }
         }
     }
 
     /// Enter drill-down mode for selected namespace
     fn enter_drill_down(&mut self) {
-        if !self.namespaces.is_empty() {
+        let has_namespaces = self.data().map(|d| !d.namespaces.is_empty()).unwrap_or(false);
+        if has_namespaces {
             self.drill_down = true;
             self.selected_item = 0;
         }
@@ -719,9 +731,11 @@ impl WorkloadHealthComponent {
 
     /// Draw the summary header
     fn draw_summary(&self, frame: &mut Frame, area: Rect) {
-        let total_workloads = self.total_deployments + self.total_statefulsets + self.total_daemonsets;
+        let Some(data) = self.data() else {
+            return;
+        };
 
-        let healthy_color = if self.total_pods_failing == 0 && self.total_pods_degraded == 0 {
+        let healthy_color = if data.total_pods_failing == 0 && data.total_pods_degraded == 0 {
             Color::Green
         } else {
             Color::White
@@ -730,47 +744,47 @@ impl WorkloadHealthComponent {
         let line = Line::from(vec![
             Span::raw("Summary: "),
             Span::styled(
-                format!("{}", self.total_deployments),
+                format!("{}", data.total_deployments),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw(" Deployments, "),
             Span::styled(
-                format!("{}", self.total_statefulsets),
+                format!("{}", data.total_statefulsets),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw(" StatefulSets, "),
             Span::styled(
-                format!("{}", self.total_daemonsets),
+                format!("{}", data.total_daemonsets),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw(" DaemonSets    "),
             Span::styled(
-                format!("● {}", self.total_pods_healthy),
+                format!("● {}", data.total_pods_healthy),
                 Style::default().fg(healthy_color),
             ),
             Span::raw(" healthy  "),
-            if self.total_pods_degraded > 0 {
+            if data.total_pods_degraded > 0 {
                 Span::styled(
-                    format!("◐ {}", self.total_pods_degraded),
+                    format!("◐ {}", data.total_pods_degraded),
                     Style::default().fg(Color::Yellow),
                 )
             } else {
                 Span::raw("")
             },
-            if self.total_pods_degraded > 0 {
+            if data.total_pods_degraded > 0 {
                 Span::raw(" degraded  ")
             } else {
                 Span::raw("")
             },
-            if self.total_pods_failing > 0 {
+            if data.total_pods_failing > 0 {
                 Span::styled(
-                    format!("✗ {}", self.total_pods_failing),
+                    format!("✗ {}", data.total_pods_failing),
                     Style::default().fg(Color::Red),
                 )
             } else {
                 Span::raw("")
             },
-            if self.total_pods_failing > 0 {
+            if data.total_pods_failing > 0 {
                 Span::raw(" failing")
             } else {
                 Span::raw("")
@@ -781,27 +795,43 @@ impl WorkloadHealthComponent {
         frame.render_widget(para, area);
     }
 
-    /// Draw the namespace list
-    fn draw_namespace_list(&mut self, frame: &mut Frame, area: Rect) {
-        let rows: Vec<Row> = self
-            .namespaces
+    /// Collect namespace row data for rendering
+    fn collect_namespace_rows(&self) -> Vec<(String, String, String, String, Color)> {
+        let Some(data) = self.data() else {
+            return Vec::new();
+        };
+        data.namespaces
             .iter()
             .map(|ns| {
                 let (indicator, color) = ns.health.indicator();
-
                 let issues_count = ns.problem_pods.len()
                     + ns.workloads.iter().filter(|w| w.health != HealthState::Healthy).count();
-
                 let issue_text = if issues_count > 0 {
                     format!("{} issues", issues_count)
                 } else {
                     "healthy".to_string()
                 };
+                (
+                    format!("{} ", indicator),
+                    ns.name.clone(),
+                    format!("{} workloads", ns.total_workloads),
+                    issue_text,
+                    color,
+                )
+            })
+            .collect()
+    }
 
+    /// Draw the namespace list
+    fn draw_namespace_list(&mut self, frame: &mut Frame, area: Rect) {
+        let row_data = self.collect_namespace_rows();
+        let rows: Vec<Row> = row_data
+            .into_iter()
+            .map(|(indicator, name, workloads, issue_text, color)| {
                 Row::new(vec![
-                    Cell::from(format!("{} ", indicator)).style(Style::default().fg(color)),
-                    Cell::from(ns.name.clone()),
-                    Cell::from(format!("{} workloads", ns.total_workloads)),
+                    Cell::from(indicator).style(Style::default().fg(color)),
+                    Cell::from(name),
+                    Cell::from(workloads),
                     Cell::from(issue_text).style(Style::default().fg(color)),
                 ])
             })
@@ -835,61 +865,72 @@ impl WorkloadHealthComponent {
         frame.render_stateful_widget(table, area, &mut self.table_state);
     }
 
-    /// Draw the drill-down view for a namespace
-    fn draw_drill_down(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(ns) = self.namespaces.get(self.selected_namespace) else {
-            return;
-        };
-
+    /// Collect drill-down row data for the selected namespace
+    fn collect_drill_down_data(&self) -> Option<(String, Vec<(String, String, String, String, String, Color)>)> {
+        let data = self.data()?;
+        let ns = data.namespaces.get(self.selected_namespace)?;
         let title = format!(" {} ", ns.name);
 
-        // Build rows from workloads and problem pods
-        let mut rows: Vec<Row> = Vec::new();
+        let mut rows = Vec::new();
 
         // Add workloads
-        for (i, workload) in ns.workloads.iter().enumerate() {
+        for workload in &ns.workloads {
             let (indicator, color) = workload.health.indicator();
-            let selected = !self.drill_down || self.selected_item == i;
-
             let status = format!("{}/{} ready", workload.ready, workload.desired);
             let issue_text = if workload.issues.is_empty() {
                 String::new()
             } else {
                 workload.issues.join(", ")
             };
-
-            let row = Row::new(vec![
-                Cell::from(format!("{} ", indicator)).style(Style::default().fg(color)),
-                Cell::from(workload.name.clone()),
-                Cell::from(workload.kind.display()),
-                Cell::from(status),
-                Cell::from(issue_text).style(Style::default().fg(color)),
-            ]);
-
-            rows.push(row);
+            rows.push((
+                format!("{} ", indicator),
+                workload.name.clone(),
+                workload.kind.display().to_string(),
+                status,
+                issue_text,
+                color,
+            ));
         }
 
         // Add problem pods
-        let workload_count = ns.workloads.len();
-        for (i, pod) in ns.problem_pods.iter().enumerate() {
+        for pod in &ns.problem_pods {
             let issue = pod.issue.as_ref();
             let (indicator, color) = issue
                 .map(|i| i.severity().indicator())
                 .unwrap_or(("?", Color::DarkGray));
-
-            let issue_text = issue.map(|i| i.display()).unwrap_or("Unknown");
-            let node_text = pod.node.as_deref().unwrap_or("-");
-
-            let row = Row::new(vec![
-                Cell::from(format!("{} ", indicator)).style(Style::default().fg(color)),
-                Cell::from(pod.name.clone()),
-                Cell::from("Pod"),
-                Cell::from(format!("{} restarts", pod.restarts)),
-                Cell::from(issue_text).style(Style::default().fg(color)),
-            ]);
-
-            rows.push(row);
+            let issue_text = issue.map(|i| i.display()).unwrap_or("Unknown").to_string();
+            rows.push((
+                format!("{} ", indicator),
+                pod.name.clone(),
+                "Pod".to_string(),
+                format!("{} restarts", pod.restarts),
+                issue_text,
+                color,
+            ));
         }
+
+        Some((title, rows))
+    }
+
+    /// Draw the drill-down view for a namespace
+    fn draw_drill_down(&mut self, frame: &mut Frame, area: Rect) {
+        let Some((title, row_data)) = self.collect_drill_down_data() else {
+            return;
+        };
+
+        // Build rows from collected data
+        let rows: Vec<Row> = row_data
+            .into_iter()
+            .map(|(indicator, name, kind, status, issue_text, color)| {
+                Row::new(vec![
+                    Cell::from(indicator).style(Style::default().fg(color)),
+                    Cell::from(name),
+                    Cell::from(kind),
+                    Cell::from(status),
+                    Cell::from(issue_text).style(Style::default().fg(color)),
+                ])
+            })
+            .collect();
 
         let widths = [
             Constraint::Length(3),
@@ -1005,13 +1046,9 @@ impl Component for WorkloadHealthComponent {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
             // Check for auto-refresh
-            if self.auto_refresh && !self.loading {
-                if let Some(last) = self.last_refresh {
-                    let interval = std::time::Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-                    if last.elapsed() >= interval {
-                        return Ok(Some(Action::Refresh));
-                    }
-                }
+            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
+            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+                return Ok(Some(Action::Refresh));
             }
         }
         Ok(None)
@@ -1025,21 +1062,22 @@ impl Component for WorkloadHealthComponent {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        if self.loading {
+        if self.state.is_loading() {
             let loading = Paragraph::new("Loading workloads...")
                 .style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, inner);
             return Ok(());
         }
 
-        if let Some(ref err) = self.error {
+        if let Some(err) = self.state.error() {
             let error = Paragraph::new(format!("Error: {}", err))
                 .style(Style::default().fg(Color::Red));
             frame.render_widget(error, inner);
             return Ok(());
         }
 
-        if self.namespaces.is_empty() {
+        let has_namespaces = self.data().map(|d| !d.namespaces.is_empty()).unwrap_or(false);
+        if !has_namespaces {
             let empty = Paragraph::new("No workloads found")
                 .style(Style::default().fg(Color::DarkGray));
             frame.render_widget(empty, inner);

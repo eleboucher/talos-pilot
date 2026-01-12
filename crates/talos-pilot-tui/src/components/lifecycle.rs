@@ -18,8 +18,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Row, Table, TableState},
     Frame,
 };
-use std::time::Instant;
-use talos_pilot_core::{HasHealth, HealthIndicator, SelectableList};
+use std::time::Duration;
+use talos_pilot_core::{AsyncState, HasHealth, HealthIndicator, SelectableList};
 use talos_rs::{get_discovery_members_for_context, DiscoveryMember, NodeTimeInfo, TalosClient, TalosConfig, VersionInfo};
 
 /// Auto-refresh interval in seconds
@@ -119,34 +119,32 @@ pub struct PreOpChecks {
     pub all_passed: bool,
 }
 
+/// Loaded lifecycle data (wrapped by AsyncState)
+#[derive(Debug, Clone, Default)]
+pub struct LifecycleData {
+    /// Context name (cluster identifier)
+    pub context_name: String,
+    /// Talos versions per node
+    pub versions: Vec<VersionInfo>,
+    /// Time sync info per node
+    pub time_info: Vec<NodeTimeInfo>,
+    /// Node statuses with selection
+    pub node_statuses: SelectableList<NodeStatus>,
+    /// Alerts
+    pub alerts: Vec<Alert>,
+    /// Discovery members (from talosctl get members)
+    pub discovery_members: Vec<DiscoveryMember>,
+    /// Pre-operation health checks
+    pub pre_op_checks: PreOpChecks,
+}
+
 /// Lifecycle component for viewing version and lifecycle status
 pub struct LifecycleComponent {
-    /// Context name (cluster identifier)
-    context_name: String,
-
-    /// Talos versions per node
-    versions: Vec<VersionInfo>,
-
-    /// Time sync info per node
-    time_info: Vec<NodeTimeInfo>,
-
-    /// Node statuses with selection
-    node_statuses: SelectableList<NodeStatus>,
-
-    /// Alerts
-    alerts: Vec<Alert>,
+    /// Async state wrapping all lifecycle data
+    state: AsyncState<LifecycleData>,
 
     /// Table state for rendering (synced with node_statuses selection)
     table_state: TableState,
-
-    /// Loading state
-    loading: bool,
-
-    /// Error message
-    error: Option<String>,
-
-    /// Last refresh time
-    last_refresh: Option<Instant>,
 
     /// Auto-refresh enabled
     auto_refresh: bool,
@@ -154,14 +152,8 @@ pub struct LifecycleComponent {
     /// Client for API calls
     client: Option<TalosClient>,
 
-    /// Discovery members (from talosctl get members)
-    discovery_members: Vec<DiscoveryMember>,
-
-    /// K8s client for pod/PDB checks
+    /// K8s client for pod/PDB checks (reusable, not part of loaded data)
     k8s_client: Option<Client>,
-
-    /// Pre-operation health checks
-    pre_op_checks: PreOpChecks,
 }
 
 impl Default for LifecycleComponent {
@@ -175,21 +167,20 @@ impl LifecycleComponent {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
 
-        Self {
+        // Initialize with context name in the data
+        let initial_data = LifecycleData {
             context_name,
-            versions: Vec::new(),
-            time_info: Vec::new(),
-            node_statuses: SelectableList::default(),
-            alerts: Vec::new(),
+            ..Default::default()
+        };
+        let mut state = AsyncState::new();
+        state.set_data(initial_data);
+
+        Self {
+            state,
             table_state,
-            loading: true,
-            error: None,
-            last_refresh: None,
             auto_refresh: true,
             client: None,
-            discovery_members: Vec::new(),
             k8s_client: None,
-            pre_op_checks: PreOpChecks::default(),
         }
     }
 
@@ -200,56 +191,69 @@ impl LifecycleComponent {
 
     /// Set error message
     pub fn set_error(&mut self, error: String) {
-        self.error = Some(error);
-        self.loading = false;
+        self.state.set_error(error);
+    }
+
+    /// Helper to get data reference
+    fn data(&self) -> Option<&LifecycleData> {
+        self.state.data()
+    }
+
+    /// Helper to get mutable data reference
+    fn data_mut(&mut self) -> Option<&mut LifecycleData> {
+        self.state.data_mut()
     }
 
     /// Refresh lifecycle data
     pub async fn refresh(&mut self) -> Result<()> {
-        self.loading = true;
-        self.error = None;
+        self.state.start_loading();
 
         let Some(client) = self.client.clone() else {
-            self.error = Some("No client configured".to_string());
-            self.loading = false;
+            self.state.set_error("No client configured");
             return Ok(());
         };
+
+        // Get or create data
+        let mut data = self.state.take_data().unwrap_or_default();
 
         // Fetch version information
         match client.version().await {
             Ok(versions) => {
                 // Get context name from first node
                 if versions.first().is_some() {
-                    if self.context_name.is_empty() {
+                    if data.context_name.is_empty() {
                         // Try to get from talosconfig
                         if let Ok(config) = talos_rs::TalosConfig::load_default() {
-                            self.context_name = config.context;
+                            data.context_name = config.context;
                         }
                     }
                 }
 
-                self.versions = versions;
+                data.versions = versions;
             }
             Err(e) => {
-                self.error = Some(format!("Failed to fetch versions: {}", e));
+                self.state.set_error(format!("Failed to fetch versions: {}", e));
+                // Re-store the data so far
+                self.state.set_data(data);
+                return Ok(());
             }
         }
 
         // Fetch time sync status
         match client.time().await {
             Ok(times) => {
-                self.time_info = times;
+                data.time_info = times;
             }
             Err(e) => {
                 // Time fetch failure is not fatal - just log it
                 tracing::warn!("Failed to fetch time status: {}", e);
-                self.time_info.clear();
+                data.time_info.clear();
             }
         }
 
         // Fetch discovery members using context-aware async version
-        let context_name = if !self.context_name.is_empty() {
-            self.context_name.clone()
+        let context_name = if !data.context_name.is_empty() {
+            data.context_name.clone()
         } else if let Ok(config) = TalosConfig::load_default() {
             config.context
         } else {
@@ -259,22 +263,22 @@ impl LifecycleComponent {
         if !context_name.is_empty() {
             match get_discovery_members_for_context(&context_name).await {
                 Ok(members) => {
-                    self.discovery_members = members;
+                    data.discovery_members = members;
                 }
                 Err(e) => {
                     tracing::debug!("Failed to get discovery members: {}", e);
-                    self.discovery_members.clear();
+                    data.discovery_members.clear();
                 }
             }
         }
 
         // Build node statuses combining version and time info
         // Fetch config hash for each node individually for drift detection
-        let statuses: Vec<NodeStatus> = self.versions
+        let statuses: Vec<NodeStatus> = data.versions
             .iter()
             .map(|v| {
                 // Look up time sync status for this node
-                let time_synced = self.time_info.iter()
+                let time_synced = data.time_info.iter()
                     .find(|t| t.node == v.node)
                     .map(|t| t.synced);
 
@@ -297,20 +301,22 @@ impl LifecycleComponent {
             .collect();
 
         // Update items, preserving selection if possible
-        self.node_statuses.update_items(statuses);
-        self.table_state.select(Some(self.node_statuses.selected_index()));
+        data.node_statuses.update_items(statuses);
+        self.table_state.select(Some(data.node_statuses.selected_index()));
 
         // Fetch pre-operation health checks
-        self.fetch_pre_op_checks(&client).await;
+        self.fetch_pre_op_checks_into(&mut data, &client).await;
 
-        self.generate_alerts();
-        self.loading = false;
-        self.last_refresh = Some(Instant::now());
+        // Generate alerts
+        Self::generate_alerts_into(&mut data);
+
+        // Store the data
+        self.state.set_data(data);
         Ok(())
     }
 
-    /// Fetch pre-operation health checks
-    async fn fetch_pre_op_checks(&mut self, client: &TalosClient) {
+    /// Fetch pre-operation health checks into data
+    async fn fetch_pre_op_checks_into(&mut self, data: &mut LifecycleData, client: &TalosClient) {
         // Initialize K8s client if not already done
         if self.k8s_client.is_none() {
             match create_k8s_client(client).await {
@@ -379,7 +385,7 @@ impl LifecycleComponent {
             pod_ok && pdb_ok && etcd_ok
         };
 
-        self.pre_op_checks = PreOpChecks {
+        data.pre_op_checks = PreOpChecks {
             pod_health,
             pdb_health,
             etcd_quorum,
@@ -387,34 +393,34 @@ impl LifecycleComponent {
         };
     }
 
-    /// Generate alerts based on current state
-    fn generate_alerts(&mut self) {
-        self.alerts.clear();
+    /// Generate alerts based on current state (static method operating on data)
+    fn generate_alerts_into(data: &mut LifecycleData) {
+        data.alerts.clear();
 
         // Check for version mismatches
-        let versions: Vec<&str> = self.versions.iter().map(|v| v.version.as_str()).collect();
+        let versions: Vec<&str> = data.versions.iter().map(|v| v.version.as_str()).collect();
         let unique_versions: std::collections::HashSet<_> = versions.iter().collect();
         if unique_versions.len() > 1 {
-            self.alerts.push(Alert {
+            data.alerts.push(Alert {
                 severity: AlertSeverity::Warning,
                 message: "Version mismatch detected across nodes".to_string(),
             });
         }
 
         // Check for time sync issues
-        let unsynced_nodes: Vec<&str> = self.node_statuses.items().iter()
+        let unsynced_nodes: Vec<&str> = data.node_statuses.items().iter()
             .filter(|n| n.time_synced == Some(false))
             .map(|n| n.hostname.as_str())
             .collect();
         if !unsynced_nodes.is_empty() {
-            self.alerts.push(Alert {
+            data.alerts.push(Alert {
                 severity: AlertSeverity::Warning,
                 message: format!("Time not synced on: {}", unsynced_nodes.join(", ")),
             });
         }
 
         // Check for config drift (compare hashes across nodes)
-        let config_hashes: Vec<(&str, Option<&str>)> = self.node_statuses.items().iter()
+        let config_hashes: Vec<(&str, Option<&str>)> = data.node_statuses.items().iter()
             .map(|n| (n.hostname.as_str(), n.config_hash.as_deref()))
             .collect();
 
@@ -429,25 +435,25 @@ impl LifecycleComponent {
                     hash.map(|h| format!("{}:{}", hostname.split(':').next().unwrap_or(hostname), h))
                 })
                 .collect();
-            self.alerts.push(Alert {
+            data.alerts.push(Alert {
                 severity: AlertSeverity::Warning,
                 message: format!("Config drift detected: {}", drift_details.join(", ")),
             });
         } else if let Some(hash) = unique_hashes.iter().next() {
             // All nodes have same config hash
-            self.alerts.push(Alert {
+            data.alerts.push(Alert {
                 severity: AlertSeverity::Info,
                 message: format!("Config version: {} (all nodes in sync)", hash),
             });
         }
 
         // Check discovery service health
-        if !self.discovery_members.is_empty() {
-            let expected_nodes = self.node_statuses.len();
-            let discovered_nodes = self.discovery_members.len();
+        if !data.discovery_members.is_empty() {
+            let expected_nodes = data.node_statuses.len();
+            let discovered_nodes = data.discovery_members.len();
 
             if discovered_nodes < expected_nodes {
-                self.alerts.push(Alert {
+                data.alerts.push(Alert {
                     severity: AlertSeverity::Warning,
                     message: format!(
                         "Discovery: {}/{} nodes visible (some nodes may not be discoverable)",
@@ -455,7 +461,7 @@ impl LifecycleComponent {
                     ),
                 });
             } else {
-                self.alerts.push(Alert {
+                data.alerts.push(Alert {
                     severity: AlertSeverity::Info,
                     message: format!("Discovery: {}/{} nodes healthy", discovered_nodes, expected_nodes),
                 });
@@ -465,7 +471,10 @@ impl LifecycleComponent {
 
     /// Get current Talos version (from first node)
     fn current_talos_version(&self) -> &str {
-        self.versions.first().map(|v| v.version.as_str()).unwrap_or("unknown")
+        self.data()
+            .and_then(|d| d.versions.first())
+            .map(|v| v.version.as_str())
+            .unwrap_or("unknown")
     }
 
     /// Get K8s version support range for current Talos
@@ -494,14 +503,28 @@ impl LifecycleComponent {
 
     /// Navigation: select next node
     fn select_next(&mut self) {
-        self.node_statuses.select_next();
-        self.table_state.select(Some(self.node_statuses.selected_index()));
+        let new_index = if let Some(data) = self.data_mut() {
+            data.node_statuses.select_next();
+            Some(data.node_statuses.selected_index())
+        } else {
+            None
+        };
+        if let Some(idx) = new_index {
+            self.table_state.select(Some(idx));
+        }
     }
 
     /// Navigation: select previous node
     fn select_prev(&mut self) {
-        self.node_statuses.select_prev();
-        self.table_state.select(Some(self.node_statuses.selected_index()));
+        let new_index = if let Some(data) = self.data_mut() {
+            data.node_statuses.select_prev();
+            Some(data.node_statuses.selected_index())
+        } else {
+            None
+        };
+        if let Some(idx) = new_index {
+            self.table_state.select(Some(idx));
+        }
     }
 
     /// Draw the cluster versions section
@@ -510,9 +533,8 @@ impl LifecycleComponent {
         let k8s_range = self.k8s_support_range();
 
         // Get platform from first node
-        let platform = self
-            .versions
-            .first()
+        let platform = self.data()
+            .and_then(|d| d.versions.first())
             .map(|v| v.platform.as_str())
             .unwrap_or("unknown");
 
@@ -564,7 +586,11 @@ impl LifecycleComponent {
             });
         let header = Row::new(header_cells).height(1);
 
-        let rows = self.node_statuses.items().iter().map(|node| {
+        let node_items: Vec<NodeStatus> = self.data()
+            .map(|d| d.node_statuses.items().to_vec())
+            .unwrap_or_default();
+
+        let rows = node_items.iter().map(|node| {
             let config_cell = match &node.config_hash {
                 Some(hash) => Span::styled(&hash[..8.min(hash.len())], Style::default().fg(Color::White)),
                 None => Span::styled("-", Style::default().fg(Color::Gray)),
@@ -621,8 +647,11 @@ impl LifecycleComponent {
 
     /// Draw the alerts section
     fn draw_alerts_section(&self, frame: &mut Frame, area: Rect) {
-        let lines: Vec<Line> = self
-            .alerts
+        let alerts: Vec<Alert> = self.data()
+            .map(|d| d.alerts.clone())
+            .unwrap_or_default();
+
+        let lines: Vec<Line> = alerts
             .iter()
             .map(|alert| {
                 let (indicator, color) = alert.severity.indicator();
@@ -646,10 +675,14 @@ impl LifecycleComponent {
 
     /// Draw the pre-operation health checks section
     fn draw_pre_op_checks(&self, frame: &mut Frame, area: Rect) {
+        let pre_op_checks = self.data()
+            .map(|d| d.pre_op_checks.clone())
+            .unwrap_or_default();
+
         let mut lines = Vec::new();
 
         // Overall status indicator
-        let (overall_indicator, overall_color) = if self.pre_op_checks.all_passed {
+        let (overall_indicator, overall_color) = if pre_op_checks.all_passed {
             ("✓", Color::Green)
         } else {
             ("!", Color::Yellow)
@@ -660,13 +693,13 @@ impl LifecycleComponent {
             Span::styled(overall_indicator, Style::default().fg(overall_color)),
             Span::raw(" "),
             Span::styled(
-                if self.pre_op_checks.all_passed { "All checks passed" } else { "Some checks have warnings" },
+                if pre_op_checks.all_passed { "All checks passed" } else { "Some checks have warnings" },
                 Style::default().fg(overall_color),
             ),
         ]));
 
         // etcd quorum check
-        if let Some(ref etcd) = self.pre_op_checks.etcd_quorum {
+        if let Some(ref etcd) = pre_op_checks.etcd_quorum {
             let (indicator, color) = if etcd.is_healthy && etcd.can_lose > 0 {
                 ("✓", Color::Green)
             } else if etcd.is_healthy {
@@ -691,7 +724,7 @@ impl LifecycleComponent {
         }
 
         // Pod health check
-        if let Some(ref pods) = self.pre_op_checks.pod_health {
+        if let Some(ref pods) = pre_op_checks.pod_health {
             let has_issues = pods.has_issues();
             let (indicator, color) = if !has_issues && pods.pending.is_empty() {
                 ("✓", Color::Green)
@@ -724,7 +757,7 @@ impl LifecycleComponent {
         }
 
         // PDB check
-        if let Some(ref pdbs) = self.pre_op_checks.pdb_health {
+        if let Some(ref pdbs) = pre_op_checks.pdb_health {
             let (indicator, color) = if !pdbs.has_blocking_pdbs() {
                 ("✓", Color::Green)
             } else {
@@ -791,33 +824,39 @@ impl Component for LifecycleComponent {
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if let Action::Tick = action {
-            // Check for auto-refresh
-            if self.auto_refresh && !self.loading {
-                if let Some(last) = self.last_refresh {
-                    let interval = std::time::Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
-                    if last.elapsed() >= interval {
-                        return Ok(Some(Action::Refresh));
-                    }
-                }
+            // Check for auto-refresh using AsyncState
+            let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
+            if self.state.should_auto_refresh(self.auto_refresh, interval) {
+                return Ok(Some(Action::Refresh));
             }
         }
         Ok(None)
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        if self.loading && self.node_statuses.is_empty() {
+        // Check loading state (show loading only if no data yet)
+        let has_nodes = self.data()
+            .map(|d| !d.node_statuses.is_empty())
+            .unwrap_or(false);
+
+        if self.state.is_loading() && !has_nodes {
             let loading = Paragraph::new("Loading lifecycle status...")
                 .style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, area);
             return Ok(());
         }
 
-        if let Some(ref err) = self.error {
+        if let Some(err) = self.state.error() {
             let error = Paragraph::new(format!("Error: {}", err))
                 .style(Style::default().fg(Color::Red));
             frame.render_widget(error, area);
             return Ok(());
         }
+
+        // Get context name from data
+        let context_name = self.data()
+            .map(|d| d.context_name.clone())
+            .unwrap_or_default();
 
         // Layout
         let chunks = Layout::vertical([
@@ -831,7 +870,7 @@ impl Component for LifecycleComponent {
         .split(area);
 
         // Header
-        let header = Paragraph::new(format!(" Lifecycle │ {}", self.context_name))
+        let header = Paragraph::new(format!(" Lifecycle │ {}", context_name))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
         frame.render_widget(header, chunks[0]);
 

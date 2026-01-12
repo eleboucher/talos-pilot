@@ -27,7 +27,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState},
     Frame,
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use talos_pilot_core::AsyncState;
 use talos_rs::{ApplyConfigResult, ApplyMode, TalosClient};
 
 pub use types::*;
@@ -35,30 +36,35 @@ pub use types::*;
 /// Default auto-refresh interval in seconds
 const AUTO_REFRESH_INTERVAL_SECS: u64 = 10;
 
-/// Diagnostics component for node health checks
-pub struct DiagnosticsComponent {
+/// Data loaded asynchronously for the diagnostics component
+#[derive(Debug, Clone, Default)]
+pub struct DiagnosticsData {
     /// Node hostname
-    hostname: String,
+    pub hostname: String,
     /// Node IP address
-    address: String,
-    /// Node role (controlplane or worker)
-    node_role: String,
+    pub address: String,
 
     /// Diagnostic context (platform, CNI type, etc.)
-    context: DiagnosticContext,
+    pub context: DiagnosticContext,
 
     /// System health checks
-    system_checks: Vec<DiagnosticCheck>,
+    pub system_checks: Vec<DiagnosticCheck>,
     /// Kubernetes component checks
-    kubernetes_checks: Vec<DiagnosticCheck>,
+    pub kubernetes_checks: Vec<DiagnosticCheck>,
     /// Service health checks
-    service_checks: Vec<DiagnosticCheck>,
+    pub service_checks: Vec<DiagnosticCheck>,
     /// CNI-specific checks
-    cni_checks: Vec<DiagnosticCheck>,
+    pub cni_checks: Vec<DiagnosticCheck>,
     /// Addon-specific checks
-    addon_checks: Vec<DiagnosticCheck>,
+    pub addon_checks: Vec<DiagnosticCheck>,
     /// Detected addons
-    detected_addons: addons::DetectedAddons,
+    pub detected_addons: addons::DetectedAddons,
+}
+
+/// Diagnostics component for node health checks
+pub struct DiagnosticsComponent {
+    /// Async state for loaded data
+    state: AsyncState<DiagnosticsData>,
 
     /// Currently selected category
     selected_category: usize,
@@ -88,12 +94,6 @@ pub struct DiagnosticsComponent {
     /// Result of the last apply
     apply_result: Option<Result<Vec<ApplyConfigResult>, String>>,
 
-    /// Loading state
-    loading: bool,
-    /// Error message
-    error: Option<String>,
-    /// Last refresh time
-    last_refresh: Option<Instant>,
     /// Auto-refresh enabled
     auto_refresh: bool,
 
@@ -119,17 +119,15 @@ impl DiagnosticsComponent {
         context.hostname = hostname.clone();
         context.node_endpoint = Some(address.clone());
 
-        Self {
+        let initial_data = DiagnosticsData {
             hostname,
             address,
-            node_role,
             context,
-            system_checks: Vec::new(),
-            kubernetes_checks: Vec::new(),
-            service_checks: Vec::new(),
-            cni_checks: Vec::new(),
-            addon_checks: Vec::new(),
-            detected_addons: addons::DetectedAddons::default(),
+            ..Default::default()
+        };
+
+        Self {
+            state: AsyncState::with_data(initial_data),
             selected_category: 0,
             selected_check: 0,
             table_state,
@@ -142,13 +140,20 @@ impl DiagnosticsComponent {
             details_content: String::new(),
             applying_fix: false,
             apply_result: None,
-            loading: true,
-            error: None,
-            last_refresh: None,
             auto_refresh: true,
             client: None,
             controlplane_endpoint: None,
         }
+    }
+
+    /// Access loaded data immutably
+    fn data(&self) -> Option<&DiagnosticsData> {
+        self.state.data()
+    }
+
+    /// Access loaded data mutably
+    fn data_mut(&mut self) -> Option<&mut DiagnosticsData> {
+        self.state.data_mut()
     }
 
     /// Set the client for making API calls
@@ -163,18 +168,20 @@ impl DiagnosticsComponent {
 
     /// Set an error message
     pub fn set_error(&mut self, error: String) {
-        self.error = Some(error);
-        self.loading = false;
+        self.state.set_error(error);
     }
 
     /// Get all checks in the current category
     fn current_checks(&self) -> &[DiagnosticCheck] {
+        let Some(data) = self.data() else {
+            return &[];
+        };
         match self.selected_category {
-            0 => &self.system_checks,
-            1 => &self.kubernetes_checks,
-            2 => &self.cni_checks,
-            3 => &self.service_checks,
-            4 => &self.addon_checks,
+            0 => &data.system_checks,
+            1 => &data.kubernetes_checks,
+            2 => &data.cni_checks,
+            3 => &data.service_checks,
+            4 => &data.addon_checks,
             _ => &[],
         }
     }
@@ -298,6 +305,9 @@ impl DiagnosticsComponent {
             return Ok(());
         };
 
+        // Get address for talosctl commands
+        let address = self.data().map(|d| d.address.clone()).unwrap_or_default();
+
         self.applying_fix = true;
         self.show_confirmation = false;
 
@@ -317,7 +327,7 @@ impl DiagnosticsComponent {
                     let output = std::process::Command::new("talosctl")
                         .args([
                             "-n",
-                            &self.address,
+                            &address,
                             "patch",
                             "machineconfig",
                             "--mode=reboot",
@@ -387,30 +397,36 @@ impl DiagnosticsComponent {
 
     /// Refresh diagnostics data from the node
     pub async fn refresh(&mut self) -> Result<()> {
-        let Some(client) = &self.client else {
-            self.set_error("No client configured".to_string());
-            return Ok(());
+        let client = match &self.client {
+            Some(c) => c.clone(),
+            None => {
+                self.set_error("No client configured".to_string());
+                return Ok(());
+            }
         };
 
-        self.loading = true;
-        self.error = None;
+        self.state.start_loading();
 
         let timeout = std::time::Duration::from_secs(15);
 
         // Fetch platform info first
         if let Ok(versions) = client.version().await {
             if let Some(v) = versions.first() {
-                self.context.platform = v.platform.clone();
-                self.context.is_container = v.platform == "container";
-                tracing::info!("Detected platform: {}", self.context.platform);
+                if let Some(data) = self.data_mut() {
+                    data.context.platform = v.platform.clone();
+                    data.context.is_container = v.platform == "container";
+                    tracing::info!("Detected platform: {}", data.context.platform);
+                }
             }
         }
 
         // Get CPU count for load threshold scaling
         if let Ok(cpu_info) = client.cpu_info().await {
             if let Some(info) = cpu_info.first() {
-                self.context.cpu_count = info.cpu_count.max(1);
-                tracing::info!("Detected {} CPUs", self.context.cpu_count);
+                if let Some(data) = self.data_mut() {
+                    data.context.cpu_count = info.cpu_count.max(1);
+                    tracing::info!("Detected {} CPUs", data.context.cpu_count);
+                }
             }
         }
 
@@ -424,14 +440,16 @@ impl DiagnosticsComponent {
         };
 
         let k8s_client = match k8s::create_k8s_client_with_kubeconfig_source(
-            client,
+            &client,
             kubeconfig_client.as_ref(),
         )
         .await
         {
             Ok(client) => {
                 tracing::info!("K8s client created successfully");
-                self.context.k8s_error = None;
+                if let Some(data) = self.data_mut() {
+                    data.context.k8s_error = None;
+                }
                 Some(client)
             }
             Err(e) => {
@@ -440,16 +458,20 @@ impl DiagnosticsComponent {
                     "Failed to create K8s client: {} - K8s-based checks will be limited",
                     error_msg
                 );
-                self.context.k8s_error = Some(error_msg);
+                if let Some(data) = self.data_mut() {
+                    data.context.k8s_error = Some(error_msg);
+                }
                 None
             }
         };
 
         // Detect CNI type (uses K8s API if available, falls back to file checks)
-        let (cni_type, cni_info) = cni::detect_cni_with_client(client, k8s_client.as_ref()).await;
-        self.context.cni_type = cni_type;
-        self.context.cni_info = cni_info;
-        tracing::info!("Detected CNI: {:?}", self.context.cni_type);
+        let (cni_type, cni_info) = cni::detect_cni_with_client(&client, k8s_client.as_ref()).await;
+        if let Some(data) = self.data_mut() {
+            data.context.cni_type = cni_type;
+            data.context.cni_info = cni_info.clone();
+            tracing::info!("Detected CNI: {:?}", data.context.cni_type);
+        }
 
         // Get pod health from K8s API (reusing the same client)
         if let Some(ref kc) = k8s_client {
@@ -479,7 +501,9 @@ impl DiagnosticsComponent {
                             .collect(),
                         total_pods: health.total_pods,
                     };
-                    self.context.pod_health = Some(pod_health);
+                    if let Some(data) = self.data_mut() {
+                        data.context.pod_health = Some(pod_health);
+                    }
                     tracing::info!("Pod health check complete: {} pods", health.total_pods);
                 }
                 Err(e) => {
@@ -488,30 +512,34 @@ impl DiagnosticsComponent {
             }
 
             // Detect installed addons
-            self.detected_addons = addons::detect_addons(kc).await;
+            let detected_addons = addons::detect_addons(kc).await;
+            if let Some(data) = self.data_mut() {
+                data.detected_addons = detected_addons;
+            }
         }
 
-        // Clone detected_addons for use in async block
-        let detected_addons = self.detected_addons.clone();
+        // Get context and detected_addons for use in async block
+        let context = self.data().map(|d| d.context.clone()).unwrap_or_default();
+        let detected_addons = self.data().map(|d| d.detected_addons.clone()).unwrap_or_default();
 
         let result = tokio::time::timeout(timeout, async {
             // Run core checks
-            let mut system_checks = core::run_system_checks(client, &self.context).await;
-            let kubernetes_checks = core::run_kubernetes_checks(client, &self.context).await;
-            let service_checks = core::run_service_checks(client, &self.context).await;
+            let mut system_checks = core::run_system_checks(&client, &context).await;
+            let kubernetes_checks = core::run_kubernetes_checks(&client, &context).await;
+            let service_checks = core::run_service_checks(&client, &context).await;
 
             // Run certificate checks and add to system checks
-            let cert_checks = core::run_certificate_checks(client, &self.context).await;
+            let cert_checks = core::run_certificate_checks(&client, &context).await;
             system_checks.extend(cert_checks);
 
             // Run CNI-specific checks
-            let cni_checks = cni::run_cni_checks(client, &self.context, k8s_client.as_ref()).await;
+            let cni_checks = cni::run_cni_checks(&client, &context, k8s_client.as_ref()).await;
 
             // Run addon-specific checks
             let addon_checks = addons::run_addon_checks(
                 k8s_client.as_ref(),
                 &detected_addons,
-                &self.context,
+                &context,
             ).await;
 
             (system_checks, kubernetes_checks, service_checks, cni_checks, addon_checks)
@@ -520,21 +548,22 @@ impl DiagnosticsComponent {
 
         match result {
             Ok((system, kubernetes, services, cni, addons_result)) => {
-                self.system_checks = system;
-                self.kubernetes_checks = kubernetes;
-                self.service_checks = services;
-                self.cni_checks = cni;
-                self.addon_checks = addons_result;
-                self.last_refresh = Some(Instant::now());
+                if let Some(data) = self.data_mut() {
+                    data.system_checks = system;
+                    data.kubernetes_checks = kubernetes;
+                    data.service_checks = services;
+                    data.cni_checks = cni;
+                    data.addon_checks = addons_result;
+                }
                 // Ensure selection is valid after checks change
                 self.ensure_valid_selection();
+                self.state.mark_loaded();
             }
             Err(_) => {
                 self.set_error("Timeout fetching diagnostics".to_string());
             }
         }
 
-        self.loading = false;
         Ok(())
     }
 
@@ -543,11 +572,14 @@ impl DiagnosticsComponent {
         match idx {
             0 => "System Health",
             1 => "Kubernetes Components",
-            2 => match self.context.cni_type {
-                CniType::Flannel => "CNI (Flannel)",
-                CniType::Cilium => "CNI (Cilium)",
-                CniType::Calico => "CNI (Calico)",
-                _ => "CNI",
+            2 => {
+                let cni_type = self.data().map(|d| d.context.cni_type.clone()).unwrap_or(CniType::Unknown);
+                match cni_type {
+                    CniType::Flannel => "CNI (Flannel)",
+                    CniType::Cilium => "CNI (Cilium)",
+                    CniType::Calico => "CNI (Calico)",
+                    _ => "CNI",
+                }
             },
             3 => "Services",
             4 => "Addons",
@@ -929,12 +961,9 @@ impl Component for DiagnosticsComponent {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         match action {
             Action::Tick => {
-                if self.auto_refresh && !self.loading {
-                    if let Some(last) = self.last_refresh {
-                        if last.elapsed().as_secs() >= AUTO_REFRESH_INTERVAL_SECS {
-                            return Ok(Some(Action::Refresh));
-                        }
-                    }
+                let interval = Duration::from_secs(AUTO_REFRESH_INTERVAL_SECS);
+                if self.state.should_auto_refresh(self.auto_refresh, interval) {
+                    return Ok(Some(Action::Refresh));
                 }
             }
             _ => {}
@@ -950,24 +979,28 @@ impl Component for DiagnosticsComponent {
         ])
         .split(area);
 
+        // Get header info from data
+        let (hostname, address, cni_label) = self.data()
+            .map(|d| (d.hostname.clone(), d.address.clone(), d.context.cni_type.name()))
+            .unwrap_or_else(|| (String::new(), String::new(), "Unknown"));
+
         // Header
-        let cni_label = self.context.cni_type.name();
         let header_text = format!(
             " Diagnostics: {} ({}) [{}] ",
-            self.hostname, self.address, cni_label
+            hostname, address, cni_label
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::BOTTOM));
         frame.render_widget(header, chunks[0]);
 
-        if let Some(error) = &self.error {
+        if let Some(error) = self.state.error() {
             let error_msg = Paragraph::new(format!("Error: {}", error))
                 .style(Style::default().fg(Color::Red));
             frame.render_widget(error_msg, chunks[1]);
-        } else {
+        } else if let Some(data) = self.data() {
             // Dynamically size Addons section based on whether addons are detected
-            let addons_height = if self.detected_addons.any_detected() {
+            let addons_height = if data.detected_addons.any_detected() {
                 Constraint::Length(5)
             } else {
                 Constraint::Length(0)
@@ -982,42 +1015,50 @@ impl Component for DiagnosticsComponent {
             ])
             .split(chunks[1]);
 
+            // Clone checks for rendering to avoid borrow issues
+            let system_checks = data.system_checks.clone();
+            let kubernetes_checks = data.kubernetes_checks.clone();
+            let cni_checks = data.cni_checks.clone();
+            let service_checks = data.service_checks.clone();
+            let addon_checks = data.addon_checks.clone();
+            let any_addons = data.detected_addons.any_detected();
+
             self.render_category(
                 frame,
                 content_chunks[0],
                 0,
-                &self.system_checks,
+                &system_checks,
                 self.selected_category == 0,
             );
             self.render_category(
                 frame,
                 content_chunks[1],
                 1,
-                &self.kubernetes_checks,
+                &kubernetes_checks,
                 self.selected_category == 1,
             );
             self.render_category(
                 frame,
                 content_chunks[2],
                 2,
-                &self.cni_checks,
+                &cni_checks,
                 self.selected_category == 2,
             );
             self.render_category(
                 frame,
                 content_chunks[3],
                 3,
-                &self.service_checks,
+                &service_checks,
                 self.selected_category == 3,
             );
 
             // Only render Addons section if addons are detected
-            if self.detected_addons.any_detected() {
+            if any_addons {
                 self.render_category(
                     frame,
                     content_chunks[4],
                     4,
-                    &self.addon_checks,
+                    &addon_checks,
                     self.selected_category == 4,
                 );
             }

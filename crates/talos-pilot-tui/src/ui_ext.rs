@@ -4,7 +4,9 @@
 //! between the UI-agnostic core library and the TUI presentation layer.
 
 use ratatui::style::Color;
-use talos_pilot_core::{CheckStatus, ConnectionState, HasHealth, HealthIndicator, QuorumState, SafetyStatus};
+use talos_pilot_core::{
+    CheckStatus, ConnectionState, HasHealth, HealthIndicator, QuorumState, SafetyStatus,
+};
 
 /// Extension trait for HealthIndicator to provide ratatui colors
 pub trait HealthIndicatorExt {
@@ -142,7 +144,11 @@ mod tests {
         let (_, color) = QuorumState::Healthy.display_with_color();
         assert_eq!(color, Color::Green);
 
-        let (_, color) = QuorumState::NoQuorum { healthy: 1, total: 3 }.display_with_color();
+        let (_, color) = QuorumState::NoQuorum {
+            healthy: 1,
+            total: 3,
+        }
+        .display_with_color();
         assert_eq!(color, Color::Red);
     }
 }

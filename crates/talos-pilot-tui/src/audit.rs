@@ -2,10 +2,10 @@
 //!
 //! Provides persistent logging of all node operations for compliance and debugging.
 
+use chrono::{DateTime, Local};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use chrono::{Local, DateTime};
 
 /// Audit log entry
 #[derive(Debug, Clone)]
@@ -187,17 +187,15 @@ impl AuditLogger {
         }
 
         match fs::read_to_string(&self.log_path) {
-            Ok(content) => {
-                content
-                    .lines()
-                    .rev()
-                    .take(count)
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect()
-            }
+            Ok(content) => content
+                .lines()
+                .rev()
+                .take(count)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
             Err(_) => Vec::new(),
         }
     }
@@ -210,7 +208,8 @@ impl Default for AuditLogger {
 }
 
 /// Global audit logger instance
-static AUDIT_LOGGER: std::sync::OnceLock<std::sync::Mutex<AuditLogger>> = std::sync::OnceLock::new();
+static AUDIT_LOGGER: std::sync::OnceLock<std::sync::Mutex<AuditLogger>> =
+    std::sync::OnceLock::new();
 
 /// Initialize the global audit logger
 pub fn init_audit_logger(cluster: &str) {

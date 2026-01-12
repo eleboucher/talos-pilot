@@ -15,15 +15,15 @@ use crossterm::event::{KeyCode, KeyEvent};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
-    api::{Api, ListParams},
     Client,
+    api::{Api, ListParams},
 };
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
-    Frame,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -573,7 +573,11 @@ impl WorkloadHealthComponent {
     }
 
     /// Classify workload health based on ready/desired counts
-    fn classify_workload_health(ready: i32, desired: i32, available: i32) -> (HealthState, Vec<String>) {
+    fn classify_workload_health(
+        ready: i32,
+        desired: i32,
+        available: i32,
+    ) -> (HealthState, Vec<String>) {
         let mut issues = Vec::new();
 
         if desired == 0 {
@@ -621,8 +625,12 @@ impl WorkloadHealthComponent {
                     if let Some(waiting) = &state.waiting {
                         let reason = waiting.reason.as_deref().unwrap_or("");
                         match reason {
-                            "CrashLoopBackOff" => return (restarts, Some(PodIssue::CrashLoopBackOff)),
-                            "ImagePullBackOff" => return (restarts, Some(PodIssue::ImagePullBackOff)),
+                            "CrashLoopBackOff" => {
+                                return (restarts, Some(PodIssue::CrashLoopBackOff));
+                            }
+                            "ImagePullBackOff" => {
+                                return (restarts, Some(PodIssue::ImagePullBackOff));
+                            }
                             "ErrImagePull" => return (restarts, Some(PodIssue::ErrImagePull)),
                             _ => {}
                         }
@@ -677,7 +685,8 @@ impl WorkloadHealthComponent {
     /// Navigate to previous item
     fn select_prev(&mut self) {
         if self.drill_down {
-            let total = self.data()
+            let total = self
+                .data()
                 .and_then(|d| d.namespaces.get(self.selected_namespace))
                 .map(|ns| ns.workloads.len() + ns.problem_pods.len())
                 .unwrap_or(0);
@@ -696,7 +705,8 @@ impl WorkloadHealthComponent {
     /// Navigate to next item
     fn select_next(&mut self) {
         if self.drill_down {
-            let total = self.data()
+            let total = self
+                .data()
                 .and_then(|d| d.namespaces.get(self.selected_namespace))
                 .map(|ns| ns.workloads.len() + ns.problem_pods.len())
                 .unwrap_or(0);
@@ -714,7 +724,10 @@ impl WorkloadHealthComponent {
 
     /// Enter drill-down mode for selected namespace
     fn enter_drill_down(&mut self) {
-        let has_namespaces = self.data().map(|d| !d.namespaces.is_empty()).unwrap_or(false);
+        let has_namespaces = self
+            .data()
+            .map(|d| !d.namespaces.is_empty())
+            .unwrap_or(false);
         if has_namespaces {
             self.drill_down = true;
             self.selected_item = 0;
@@ -803,7 +816,10 @@ impl WorkloadHealthComponent {
             .map(|ns| {
                 let (indicator, color) = ns.health.indicator();
                 let issues_count = ns.problem_pods.len()
-                    + ns.workloads.iter().filter(|w| w.health != HealthState::Healthy).count();
+                    + ns.workloads
+                        .iter()
+                        .filter(|w| w.health != HealthState::Healthy)
+                        .count();
                 let issue_text = if issues_count > 0 {
                     format!("{} issues", issues_count)
                 } else {
@@ -864,7 +880,9 @@ impl WorkloadHealthComponent {
     }
 
     /// Collect drill-down row data for the selected namespace
-    fn collect_drill_down_data(&self) -> Option<(String, Vec<(String, String, String, String, String, Color)>)> {
+    fn collect_drill_down_data(
+        &self,
+    ) -> Option<(String, Vec<(String, String, String, String, String, Color)>)> {
         let data = self.data()?;
         let ns = data.namespaces.get(self.selected_namespace)?;
         let title = format!(" {} ", ns.name);
@@ -1061,32 +1079,35 @@ impl Component for WorkloadHealthComponent {
         frame.render_widget(block, area);
 
         if self.state.is_loading() {
-            let loading = Paragraph::new("Loading workloads...")
-                .style(Style::default().fg(Color::DarkGray));
+            let loading =
+                Paragraph::new("Loading workloads...").style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, inner);
             return Ok(());
         }
 
         if let Some(err) = self.state.error() {
-            let error = Paragraph::new(format!("Error: {}", err))
-                .style(Style::default().fg(Color::Red));
+            let error =
+                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
             frame.render_widget(error, inner);
             return Ok(());
         }
 
-        let has_namespaces = self.data().map(|d| !d.namespaces.is_empty()).unwrap_or(false);
+        let has_namespaces = self
+            .data()
+            .map(|d| !d.namespaces.is_empty())
+            .unwrap_or(false);
         if !has_namespaces {
-            let empty = Paragraph::new("No workloads found")
-                .style(Style::default().fg(Color::DarkGray));
+            let empty =
+                Paragraph::new("No workloads found").style(Style::default().fg(Color::DarkGray));
             frame.render_widget(empty, inner);
             return Ok(());
         }
 
         // Layout
         let chunks = Layout::vertical([
-            Constraint::Length(2),  // Summary
-            Constraint::Fill(1),    // Content (list or drill-down)
-            Constraint::Length(1),  // Footer
+            Constraint::Length(2), // Summary
+            Constraint::Fill(1),   // Content (list or drill-down)
+            Constraint::Length(1), // Footer
         ])
         .split(inner);
 

@@ -14,8 +14,14 @@ fn convert_ed25519_key_to_pkcs8(pem: &[u8]) -> Vec<u8> {
     let pem_str = String::from_utf8_lossy(pem);
     if pem_str.contains("ED25519 PRIVATE KEY") {
         pem_str
-            .replace("-----BEGIN ED25519 PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----")
-            .replace("-----END ED25519 PRIVATE KEY-----", "-----END PRIVATE KEY-----")
+            .replace(
+                "-----BEGIN ED25519 PRIVATE KEY-----",
+                "-----BEGIN PRIVATE KEY-----",
+            )
+            .replace(
+                "-----END ED25519 PRIVATE KEY-----",
+                "-----END PRIVATE KEY-----",
+            )
             .into_bytes()
     } else {
         pem.to_vec()
@@ -47,13 +53,13 @@ pub async fn create_channel(ctx: &Context) -> Result<Channel, TalosError> {
     let ca = Certificate::from_pem(&ca_pem);
     let identity = Identity::from_pem(&client_cert_pem, &client_key_pem);
 
-    let tls_config = ClientTlsConfig::new()
-        .ca_certificate(ca)
-        .identity(identity);
+    let tls_config = ClientTlsConfig::new().ca_certificate(ca).identity(identity);
 
     // Build the channel (use connect_lazy to defer TLS handshake)
     let endpoint = Channel::from_shared(endpoint_url.clone())
-        .map_err(|e| TalosError::Connection(format!("Invalid endpoint URL '{}': {}", endpoint_url, e)))?
+        .map_err(|e| {
+            TalosError::Connection(format!("Invalid endpoint URL '{}': {}", endpoint_url, e))
+        })?
         .tls_config(tls_config)
         .map_err(|e| TalosError::Tls(format!("TLS config error: {:?}", e)))?;
 
@@ -72,7 +78,9 @@ pub fn parse_certificates(pem_data: &[u8]) -> Result<Vec<CertificateDer<'static>
         .collect();
 
     if certs.is_empty() {
-        return Err(TalosError::Tls("No certificates found in PEM data".to_string()));
+        return Err(TalosError::Tls(
+            "No certificates found in PEM data".to_string(),
+        ));
     }
 
     Ok(certs)

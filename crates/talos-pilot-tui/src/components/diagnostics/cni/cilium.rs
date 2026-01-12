@@ -16,8 +16,8 @@ use crate::components::diagnostics::types::{
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
-    api::{Api, ListParams},
     Client,
+    api::{Api, ListParams},
 };
 use talos_rs::is_kubespan_enabled;
 
@@ -76,13 +76,11 @@ fn check_cilium_agents_per_node(cni_info: &CniInfo) -> DiagnosticCheck {
         .collect();
 
     if agent_pods.is_empty() {
-        return DiagnosticCheck::warn(
-            "cilium_agents",
-            "Cilium Agents",
-            "No agent pods found",
-        )
-        .with_details("Could not find Cilium agent pods in kube-system namespace.\n\
-                       Expected pods matching 'cilium-*' (DaemonSet).");
+        return DiagnosticCheck::warn("cilium_agents", "Cilium Agents", "No agent pods found")
+            .with_details(
+                "Could not find Cilium agent pods in kube-system namespace.\n\
+                       Expected pods matching 'cilium-*' (DaemonSet).",
+            );
     }
 
     let total = agent_pods.len();
@@ -100,14 +98,18 @@ fn check_cilium_agents_per_node(cni_info: &CniInfo) -> DiagnosticCheck {
     if unhealthy.is_empty() {
         // All healthy
         let message = if total_restarts > 0 {
-            format!("{}/{} agents ready ({} restarts)", healthy.len(), total, total_restarts)
+            format!(
+                "{}/{} agents ready ({} restarts)",
+                healthy.len(),
+                total,
+                total_restarts
+            )
         } else {
             format!("{}/{} agents ready", healthy.len(), total)
         };
 
         let details = format_agent_details(&agent_pods);
-        DiagnosticCheck::pass("cilium_agents", "Cilium Agents", &message)
-            .with_details(&details)
+        DiagnosticCheck::pass("cilium_agents", "Cilium Agents", &message).with_details(&details)
     } else {
         // Some unhealthy
         let message = format!("{}/{} agents ready", healthy.len(), total);
@@ -224,12 +226,14 @@ async fn check_cilium_operator(client: &Client) -> DiagnosticCheck {
                         &format!("{}/{} ready", ready, replicas),
                         None,
                     )
-                    .with_details("Cilium Operator is not ready. This can affect:\n\
+                    .with_details(
+                        "Cilium Operator is not ready. This can affect:\n\
                                   - IP address allocation\n\
                                   - CiliumNetworkPolicy enforcement\n\
                                   - Cluster mesh operations\n\n\
                                   Check operator logs:\n\
-                                  kubectl logs -n kube-system -l name=cilium-operator");
+                                  kubectl logs -n kube-system -l name=cilium-operator",
+                    );
                 }
             }
             Err(_) => continue,
@@ -237,9 +241,10 @@ async fn check_cilium_operator(client: &Client) -> DiagnosticCheck {
     }
 
     // No operator found - this might be fine for some Cilium configurations
-    DiagnosticCheck::unknown("cilium_operator", "Cilium Operator")
-        .with_details("Cilium Operator deployment not found in kube-system.\n\
-                       Some Cilium features may require the operator.")
+    DiagnosticCheck::unknown("cilium_operator", "Cilium Operator").with_details(
+        "Cilium Operator deployment not found in kube-system.\n\
+                       Some Cilium features may require the operator.",
+    )
 }
 
 /// Check Hubble Relay deployment status (returns None if Hubble not deployed)
@@ -259,15 +264,19 @@ async fn check_hubble_relay(client: &Client) -> Option<DiagnosticCheck> {
                     &format!("{}/{} ready", ready, replicas),
                 ))
             } else {
-                Some(DiagnosticCheck::fail(
-                    "hubble_relay",
-                    "Hubble Relay",
-                    &format!("{}/{} ready", ready, replicas),
-                    None,
-                )
-                .with_details("Hubble Relay is not ready. Network flow observability unavailable.\n\n\
+                Some(
+                    DiagnosticCheck::fail(
+                        "hubble_relay",
+                        "Hubble Relay",
+                        &format!("{}/{} ready", ready, replicas),
+                        None,
+                    )
+                    .with_details(
+                        "Hubble Relay is not ready. Network flow observability unavailable.\n\n\
                               Check relay logs:\n\
-                              kubectl logs -n kube-system -l k8s-app=hubble-relay"))
+                              kubectl logs -n kube-system -l k8s-app=hubble-relay",
+                    ),
+                )
             }
         }
         Err(_) => None, // Hubble not deployed - not an error
@@ -355,12 +364,14 @@ async fn check_kubespan_compatibility(
 
     if kubespan_enabled {
         // Both Cilium eBPF and KubeSpan are enabled - this is problematic
-        Some(DiagnosticCheck::warn(
-            "cilium_kubespan_compat",
-            "Cilium + KubeSpan",
-            "Compatibility issue detected",
-        ).with_details(
-            "Cilium is running in eBPF mode (kube-proxy replacement) with KubeSpan enabled.\n\n\
+        Some(
+            DiagnosticCheck::warn(
+                "cilium_kubespan_compat",
+                "Cilium + KubeSpan",
+                "Compatibility issue detected",
+            )
+            .with_details(
+                "Cilium is running in eBPF mode (kube-proxy replacement) with KubeSpan enabled.\n\n\
             This combination can cause networking issues due to asymmetric routing:\n\
             - KubeSpan routes inter-node traffic through WireGuard tunnels\n\
             - Cilium eBPF manages service routing at the kernel level\n\
@@ -369,8 +380,9 @@ async fn check_kubespan_compatibility(
             Recommendations:\n\
             1. Disable KubeSpan if using Cilium eBPF mode\n\
             2. Or use Cilium in legacy mode (with kube-proxy) if KubeSpan is required\n\n\
-            See: https://www.talos.dev/latest/kubernetes-guides/network/kubespan/"
-        ))
+            See: https://www.talos.dev/latest/kubernetes-guides/network/kubespan/",
+            ),
+        )
     } else {
         // KubeSpan not enabled, no issue
         None
@@ -378,7 +390,10 @@ async fn check_kubespan_compatibility(
 }
 
 /// Determine overall Cilium CNI status based on component checks
-fn determine_overall_status(checks: &[DiagnosticCheck], ctx: &DiagnosticContext) -> DiagnosticCheck {
+fn determine_overall_status(
+    checks: &[DiagnosticCheck],
+    ctx: &DiagnosticContext,
+) -> DiagnosticCheck {
     use crate::components::diagnostics::types::CheckStatus;
 
     // Check if any critical checks failed
@@ -386,18 +401,9 @@ fn determine_overall_status(checks: &[DiagnosticCheck], ctx: &DiagnosticContext)
     let has_warning = checks.iter().any(|c| c.status == CheckStatus::Warn);
 
     if has_failure {
-        DiagnosticCheck::fail(
-            "cni",
-            "CNI (Cilium)",
-            "Some components unhealthy",
-            None,
-        )
+        DiagnosticCheck::fail("cni", "CNI (Cilium)", "Some components unhealthy", None)
     } else if has_warning {
-        DiagnosticCheck::warn(
-            "cni",
-            "CNI (Cilium)",
-            "Minor issues detected",
-        )
+        DiagnosticCheck::warn("cni", "CNI (Cilium)", "Minor issues detected")
     } else if ctx.cni_info.is_some() {
         DiagnosticCheck::pass("cni", "CNI (Cilium)", "OK")
     } else {

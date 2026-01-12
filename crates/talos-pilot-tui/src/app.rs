@@ -1,8 +1,12 @@
 //! Application state and main loop
 
 use crate::action::Action;
-use crate::components::{ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, LifecycleComponent, MultiLogsComponent, NetworkStatsComponent, NodeOperationsComponent, ProcessesComponent, RollingOperationsComponent, SecurityComponent, WorkloadHealthComponent};
 use crate::components::rolling_operations::RollingNodeInfo;
+use crate::components::{
+    ClusterComponent, Component, DiagnosticsComponent, EtcdComponent, LifecycleComponent,
+    MultiLogsComponent, NetworkStatsComponent, NodeOperationsComponent, ProcessesComponent,
+    RollingOperationsComponent, SecurityComponent, WorkloadHealthComponent,
+};
 use crate::tui::{self, Tui};
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyEventKind};
@@ -544,7 +548,8 @@ impl App {
                     // Set the client for streaming capability
                     multi_logs.set_client(client.clone(), self.tail_lines);
 
-                    let service_refs: Vec<&str> = active_services.iter().map(|s| s.as_str()).collect();
+                    let service_refs: Vec<&str> =
+                        active_services.iter().map(|s| s.as_str()).collect();
                     match client.logs_multi(&service_refs, self.tail_lines).await {
                         Ok(logs) => {
                             multi_logs.set_logs(logs);
@@ -567,7 +572,10 @@ impl App {
                 // Switch to diagnostics view for a node
                 tracing::info!(
                     "ShowDiagnostics: hostname='{}', address='{}', role='{}', cp_endpoint={:?}",
-                    hostname, address, role, cp_endpoint
+                    hostname,
+                    address,
+                    role,
+                    cp_endpoint
                 );
 
                 // Create diagnostics component
@@ -622,7 +630,11 @@ impl App {
             }
             Action::ShowProcesses(hostname, address) => {
                 // Switch to processes view for a node
-                tracing::info!("ShowProcesses: hostname='{}', address='{}'", hostname, address);
+                tracing::info!(
+                    "ShowProcesses: hostname='{}', address='{}'",
+                    hostname,
+                    address
+                );
 
                 // Create processes component
                 let mut processes = ProcessesComponent::new(hostname, address.clone());
@@ -644,7 +656,11 @@ impl App {
             }
             Action::ShowNetwork(hostname, address) => {
                 // Switch to network stats view for a node
-                tracing::info!("ShowNetwork: hostname='{}', address='{}'", hostname, address);
+                tracing::info!(
+                    "ShowNetwork: hostname='{}', address='{}'",
+                    hostname,
+                    address
+                );
 
                 // Create network component
                 let mut network = NetworkStatsComponent::new(hostname, address.clone());
@@ -713,7 +729,8 @@ impl App {
 
                 // Create K8s client from Talos client
                 if let Some(talos_client) = self.cluster.client() {
-                    match crate::components::diagnostics::k8s::create_k8s_client(talos_client).await {
+                    match crate::components::diagnostics::k8s::create_k8s_client(talos_client).await
+                    {
                         Ok(k8s_client) => {
                             workloads.set_k8s_client(k8s_client);
                         }
@@ -761,7 +778,8 @@ impl App {
                 let mut rolling_ops = RollingOperationsComponent::new();
 
                 // Convert node tuples to RollingNodeInfo
-                let node_infos: Vec<RollingNodeInfo> = nodes.into_iter()
+                let node_infos: Vec<RollingNodeInfo> = nodes
+                    .into_iter()
                     .map(|(hostname, address, is_controlplane)| RollingNodeInfo {
                         hostname,
                         address,
@@ -777,7 +795,9 @@ impl App {
                     rolling_ops.set_talos_client(talos_client.clone());
 
                     // Try to get K8s client
-                    if let Ok(k8s) = crate::components::diagnostics::k8s::create_k8s_client(talos_client).await {
+                    if let Ok(k8s) =
+                        crate::components::diagnostics::k8s::create_k8s_client(talos_client).await
+                    {
                         rolling_ops.set_k8s_client(k8s);
                     }
                 }

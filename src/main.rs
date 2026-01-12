@@ -5,7 +5,7 @@ use color_eyre::Result;
 use std::fs::File;
 use talos_pilot_tui::App;
 use tracing::Level;
-use tracing_subscriber::{prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, prelude::*};
 
 /// talos-pilot: Terminal UI for Talos Linux clusters
 #[derive(Parser, Debug)]
@@ -52,10 +52,7 @@ async fn main() -> Result<()> {
                 .with_ansi(true)
                 .with_target(false),
         )
-        .with(
-            EnvFilter::from_default_env()
-                .add_directive(log_level.into()),
-        )
+        .with(EnvFilter::from_default_env().add_directive(log_level.into()))
         .init();
 
     tracing::info!("Starting talos-pilot");

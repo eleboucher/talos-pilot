@@ -182,10 +182,7 @@ mod tests {
 
     #[test]
     fn test_format_timeout_error() {
-        assert_eq!(
-            format_timeout_error(10, 0),
-            "Request timed out after 10s"
-        );
+        assert_eq!(format_timeout_error(10, 0), "Request timed out after 10s");
         assert_eq!(
             format_timeout_error(10, 3),
             "Request timed out after 10s (retry 3)"

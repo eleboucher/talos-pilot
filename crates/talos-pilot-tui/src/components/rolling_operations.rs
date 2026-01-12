@@ -4,21 +4,21 @@
 //! with health checks between each node.
 
 use crate::action::Action;
-use crate::audit::{audit_start, audit_success, audit_failure};
+use crate::audit::{audit_failure, audit_start, audit_success};
 use crate::components::Component;
 use crate::components::diagnostics::k8s::{
-    cordon_node, drain_node_with_progress, uncordon_node, wait_for_node_ready,
-    DrainOptions, DrainProgressCallback, NodeReadyProgressCallback,
+    DrainOptions, DrainProgressCallback, NodeReadyProgressCallback, cordon_node,
+    drain_node_with_progress, uncordon_node, wait_for_node_ready,
 };
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use kube::Client;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 use std::sync::{Arc, Mutex};
 use talos_rs::TalosClient;
@@ -156,7 +156,9 @@ impl RollingOperationsComponent {
 
     /// Get selected nodes in selection order
     fn selected_nodes(&self) -> Vec<&RollingNodeInfo> {
-        let mut selected: Vec<&RollingNodeInfo> = self.nodes.iter()
+        let mut selected: Vec<&RollingNodeInfo> = self
+            .nodes
+            .iter()
             .filter(|n| n.selection_order.is_some())
             .collect();
         selected.sort_by_key(|n| n.selection_order);
@@ -165,7 +167,10 @@ impl RollingOperationsComponent {
 
     /// Get the count of selected nodes
     fn selected_count(&self) -> usize {
-        self.nodes.iter().filter(|n| n.selection_order.is_some()).count()
+        self.nodes
+            .iter()
+            .filter(|n| n.selection_order.is_some())
+            .count()
     }
 
     /// Toggle selection of the current node
@@ -198,7 +203,9 @@ impl RollingOperationsComponent {
     /// Start a rolling operation
     fn start_operation(&mut self, operation: RollingOperationType) {
         // Get selected nodes sorted by selection order
-        let mut selected: Vec<RollingNodeInfo> = self.nodes.iter()
+        let mut selected: Vec<RollingNodeInfo> = self
+            .nodes
+            .iter()
             .filter(|n| n.selection_order.is_some())
             .cloned()
             .collect();
@@ -232,7 +239,8 @@ impl RollingOperationsComponent {
                 stop_on_failure,
                 k8s_client,
                 talos_client,
-            ).await
+            )
+            .await
         });
 
         self.operation_task = Some(task);
@@ -303,7 +311,11 @@ async fn run_rolling_operation(
     let total = nodes.len();
     let op_name = operation.name();
 
-    audit_start(op_name, &format!("{} nodes", total), "Starting rolling operation");
+    audit_start(
+        op_name,
+        &format!("{} nodes", total),
+        "Starting rolling operation",
+    );
 
     let Some(k8s) = k8s_client else {
         audit_failure(op_name, "cluster", "No K8s client available");
@@ -359,11 +371,15 @@ async fn run_rolling_operation(
             }
         });
 
-        let drain_result = drain_node_with_progress(&k8s, &node.hostname, &options, Some(callback)).await;
+        let drain_result =
+            drain_node_with_progress(&k8s, &node.hostname, &options, Some(callback)).await;
         match drain_result {
             Ok(result) if !result.success => {
                 let _ = uncordon_node(&k8s, &node.hostname).await;
-                let msg = format!("Drain failed for {}: {:?}", node.hostname, result.failed_pods);
+                let msg = format!(
+                    "Drain failed for {}: {:?}",
+                    node.hostname, result.failed_pods
+                );
                 audit_failure(op_name, &node.hostname, &msg);
                 if stop_on_failure {
                     return RollingOperationResult {
@@ -420,7 +436,12 @@ async fn run_rolling_operation(
                 if options.wait_for_node_ready {
                     {
                         let mut p = progress.lock().unwrap();
-                        p.message = format!("Waiting for {} to come back ({}/{})", node.hostname, idx + 1, total);
+                        p.message = format!(
+                            "Waiting for {} to come back ({}/{})",
+                            node.hostname,
+                            idx + 1,
+                            total
+                        );
                     }
 
                     let progress_clone = progress.clone();
@@ -437,11 +458,15 @@ async fn run_rolling_operation(
                         options.post_reboot_timeout_secs,
                         true,
                         Some(ready_callback),
-                    ).await;
+                    )
+                    .await;
 
                     match ready_result {
                         Ok(result) if !result.success => {
-                            let msg = format!("Node {} didn't become Ready: {:?}", node.hostname, result.error);
+                            let msg = format!(
+                                "Node {} didn't become Ready: {:?}",
+                                node.hostname, result.error
+                            );
                             audit_failure(op_name, &node.hostname, &msg);
                             if stop_on_failure {
                                 return RollingOperationResult {
@@ -491,7 +516,11 @@ async fn run_rolling_operation(
         }
 
         completed += 1;
-        audit_success(op_name, &node.hostname, &format!("Node {}/{} completed", completed, total));
+        audit_success(
+            op_name,
+            &node.hostname,
+            &format!("Node {}/{} completed", completed, total),
+        );
 
         // Delay between nodes (if not the last node)
         if idx < total - 1 && delay_secs > 0 {
@@ -517,60 +546,54 @@ async fn run_rolling_operation(
 impl Component for RollingOperationsComponent {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         match &self.state {
-            RollingState::Selecting => {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if self.cursor > 0 {
-                            self.cursor -= 1;
-                        }
-                        Ok(None)
+            RollingState::Selecting => match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.cursor > 0 {
+                        self.cursor -= 1;
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if self.cursor < self.nodes.len().saturating_sub(1) {
-                            self.cursor += 1;
-                        }
-                        Ok(None)
-                    }
-                    KeyCode::Char(' ') | KeyCode::Enter => {
-                        self.toggle_current();
-                        Ok(None)
-                    }
-                    KeyCode::Char('d') => {
-                        if !self.selected_nodes().is_empty() {
-                            self.state = RollingState::Confirming(RollingOperationType::Drain);
-                        }
-                        Ok(None)
-                    }
-                    KeyCode::Char('r') => {
-                        if !self.selected_nodes().is_empty() {
-                            self.state = RollingState::Confirming(RollingOperationType::Reboot);
-                        }
-                        Ok(None)
-                    }
-                    _ => Ok(None),
+                    Ok(None)
                 }
-            }
-            RollingState::Confirming(op_type) => {
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                        self.start_operation(*op_type);
-                        Ok(None)
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.cursor < self.nodes.len().saturating_sub(1) {
+                        self.cursor += 1;
                     }
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                        self.state = RollingState::Selecting;
-                        Ok(None)
-                    }
-                    _ => Ok(None),
+                    Ok(None)
                 }
-            }
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    self.toggle_current();
+                    Ok(None)
+                }
+                KeyCode::Char('d') => {
+                    if !self.selected_nodes().is_empty() {
+                        self.state = RollingState::Confirming(RollingOperationType::Drain);
+                    }
+                    Ok(None)
+                }
+                KeyCode::Char('r') => {
+                    if !self.selected_nodes().is_empty() {
+                        self.state = RollingState::Confirming(RollingOperationType::Reboot);
+                    }
+                    Ok(None)
+                }
+                _ => Ok(None),
+            },
+            RollingState::Confirming(op_type) => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    self.start_operation(*op_type);
+                    Ok(None)
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.state = RollingState::Selecting;
+                    Ok(None)
+                }
+                _ => Ok(None),
+            },
             RollingState::InProgress { .. } => {
                 self.poll_operation();
                 Ok(None)
             }
-            RollingState::Completed { .. } => {
-                Ok(Some(Action::Back))
-            }
+            RollingState::Completed { .. } => Ok(Some(Action::Back)),
         }
     }
 
@@ -599,11 +622,29 @@ impl Component for RollingOperationsComponent {
             RollingState::Confirming(op_type) => {
                 self.draw_confirmation(frame, overlay_area, *op_type);
             }
-            RollingState::InProgress { operation, current_node_idx, message } => {
+            RollingState::InProgress {
+                operation,
+                current_node_idx,
+                message,
+            } => {
                 self.draw_progress(frame, overlay_area, *operation, *current_node_idx, message);
             }
-            RollingState::Completed { operation, success, completed_nodes, failed_node, message } => {
-                self.draw_completed(frame, overlay_area, *operation, *success, *completed_nodes, failed_node.as_deref(), message);
+            RollingState::Completed {
+                operation,
+                success,
+                completed_nodes,
+                failed_node,
+                message,
+            } => {
+                self.draw_completed(
+                    frame,
+                    overlay_area,
+                    *operation,
+                    *success,
+                    *completed_nodes,
+                    failed_node.as_deref(),
+                    message,
+                );
             }
         }
 
@@ -615,9 +656,10 @@ impl RollingOperationsComponent {
     fn draw_selection(&self, frame: &mut Frame, area: Rect) {
         let mut lines = Vec::new();
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Select nodes (order shown by number):", Style::default().fg(Color::Yellow)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Select nodes (order shown by number):",
+            Style::default().fg(Color::Yellow),
+        )]));
         lines.push(Line::from(""));
 
         for (idx, node) in self.nodes.iter().enumerate() {
@@ -630,7 +672,9 @@ impl RollingOperationsComponent {
             let is_selected = node.selection_order.is_some();
 
             let style = if is_current {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else if is_selected {
                 Style::default().fg(Color::Green)
             } else {
@@ -660,7 +704,10 @@ impl RollingOperationsComponent {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(format!("{} nodes selected", selected_count), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("{} nodes selected", selected_count),
+                Style::default().fg(Color::Cyan),
+            ),
         ]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
@@ -689,12 +736,12 @@ impl RollingOperationsComponent {
         let selected = self.selected_nodes();
         let mut lines = Vec::new();
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {} {} nodes?", op_type.name(), selected.len()),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {} {} nodes?", op_type.name(), selected.len()),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]));
         lines.push(Line::from(""));
 
         for node in selected.iter().take(5) {
@@ -704,9 +751,10 @@ impl RollingOperationsComponent {
             ]));
         }
         if selected.len() > 5 {
-            lines.push(Line::from(vec![
-                Span::styled(format!("    ... and {} more", selected.len() - 5), Style::default().fg(Color::DarkGray)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                format!("    ... and {} more", selected.len() - 5),
+                Style::default().fg(Color::DarkGray),
+            )]));
         }
 
         lines.push(Line::from(""));
@@ -726,29 +774,41 @@ impl RollingOperationsComponent {
         frame.render_widget(paragraph, area);
     }
 
-    fn draw_progress(&self, frame: &mut Frame, area: Rect, operation: RollingOperationType, current_idx: usize, message: &str) {
+    fn draw_progress(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        operation: RollingOperationType,
+        current_idx: usize,
+        message: &str,
+    ) {
         let total = self.selected_nodes().len();
         let mut lines = Vec::new();
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {} in progress...", operation.name()),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {} in progress...", operation.name()),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::raw("  Progress: "),
-            Span::styled(format!("{}/{}", current_idx + 1, total), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("{}/{}", current_idx + 1, total),
+                Style::default().fg(Color::Cyan),
+            ),
         ]));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {}", message), Style::default().fg(Color::White)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", message),
+            Style::default().fg(Color::White),
+        )]));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Please wait...", Style::default().fg(Color::DarkGray)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Please wait...",
+            Style::default().fg(Color::DarkGray),
+        )]));
 
         let block = Block::default()
             .title(format!(" {} ", operation.name()))
@@ -759,7 +819,16 @@ impl RollingOperationsComponent {
         frame.render_widget(paragraph, area);
     }
 
-    fn draw_completed(&self, frame: &mut Frame, area: Rect, operation: RollingOperationType, success: bool, completed: usize, failed_node: Option<&str>, message: &str) {
+    fn draw_completed(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        operation: RollingOperationType,
+        success: bool,
+        completed: usize,
+        failed_node: Option<&str>,
+        message: &str,
+    ) {
         let (status_icon, status_color) = if success {
             ("Success", Color::Green)
         } else {
@@ -768,12 +837,12 @@ impl RollingOperationsComponent {
 
         let mut lines = Vec::new();
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {} {}", operation.name(), status_icon),
-                Style::default().fg(status_color).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {} {}", operation.name(), status_icon),
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        )]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::raw("  Completed: "),
@@ -789,13 +858,12 @@ impl RollingOperationsComponent {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::raw(format!("  {}", message)),
-        ]));
+        lines.push(Line::from(vec![Span::raw(format!("  {}", message))]));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Press any key to continue...", Style::default().fg(Color::DarkGray)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Press any key to continue...",
+            Style::default().fg(Color::DarkGray),
+        )]));
 
         let block = Block::default()
             .title(format!(" {} Complete ", operation.name()))

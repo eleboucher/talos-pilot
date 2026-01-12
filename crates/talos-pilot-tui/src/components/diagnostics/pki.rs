@@ -145,10 +145,10 @@ pub fn parse_certificate(name: &str, pem_data: &[u8]) -> Result<CertificateInfo,
     let not_after = cert.validity().not_after.to_datetime();
 
     // Convert to chrono DateTime
-    let not_before_chrono = DateTime::from_timestamp(not_before.unix_timestamp(), 0)
-        .unwrap_or_else(|| Utc::now());
-    let not_after_chrono = DateTime::from_timestamp(not_after.unix_timestamp(), 0)
-        .unwrap_or_else(|| Utc::now());
+    let not_before_chrono =
+        DateTime::from_timestamp(not_before.unix_timestamp(), 0).unwrap_or_else(|| Utc::now());
+    let not_after_chrono =
+        DateTime::from_timestamp(not_after.unix_timestamp(), 0).unwrap_or_else(|| Utc::now());
 
     // Calculate days remaining
     let now = Utc::now();
@@ -203,23 +203,20 @@ pub struct PkiStatus {
 impl PkiStatus {
     /// Get the most urgent certificate (closest to expiry or already expired)
     pub fn most_urgent(&self) -> Option<&CertificateInfo> {
-        let all_certs: Vec<&CertificateInfo> = self
-            .cas
-            .iter()
-            .chain(self.client_certs.iter())
-            .collect();
+        let all_certs: Vec<&CertificateInfo> =
+            self.cas.iter().chain(self.client_certs.iter()).collect();
 
-        all_certs
-            .into_iter()
-            .min_by_key(|c| c.days_remaining)
+        all_certs.into_iter().min_by_key(|c| c.days_remaining)
     }
 
     /// Check if any certificate is in warning or worse status
     pub fn has_warnings(&self) -> bool {
-        self.cas
-            .iter()
-            .chain(self.client_certs.iter())
-            .any(|c| matches!(c.status, CertStatus::Warning | CertStatus::Critical | CertStatus::Expired))
+        self.cas.iter().chain(self.client_certs.iter()).any(|c| {
+            matches!(
+                c.status,
+                CertStatus::Warning | CertStatus::Critical | CertStatus::Expired
+            )
+        })
     }
 
     /// Check if any certificate has expired
@@ -232,16 +229,25 @@ impl PkiStatus {
 
     /// Get summary counts
     pub fn summary(&self) -> (usize, usize, usize, usize) {
-        let all_certs: Vec<&CertificateInfo> = self
-            .cas
-            .iter()
-            .chain(self.client_certs.iter())
-            .collect();
+        let all_certs: Vec<&CertificateInfo> =
+            self.cas.iter().chain(self.client_certs.iter()).collect();
 
-        let valid = all_certs.iter().filter(|c| c.status == CertStatus::Valid).count();
-        let warning = all_certs.iter().filter(|c| c.status == CertStatus::Warning).count();
-        let critical = all_certs.iter().filter(|c| c.status == CertStatus::Critical).count();
-        let expired = all_certs.iter().filter(|c| c.status == CertStatus::Expired).count();
+        let valid = all_certs
+            .iter()
+            .filter(|c| c.status == CertStatus::Valid)
+            .count();
+        let warning = all_certs
+            .iter()
+            .filter(|c| c.status == CertStatus::Warning)
+            .count();
+        let critical = all_certs
+            .iter()
+            .filter(|c| c.status == CertStatus::Critical)
+            .count();
+        let expired = all_certs
+            .iter()
+            .filter(|c| c.status == CertStatus::Expired)
+            .count();
 
         (valid, warning, critical, expired)
     }
@@ -329,7 +335,10 @@ impl EncryptionStatus {
     /// Check if any volume is encrypted with strong encryption
     pub fn has_strong_encryption(&self) -> bool {
         self.volumes.iter().any(|v| {
-            matches!(v.provider, EncryptionProvider::Tpm | EncryptionProvider::Kms)
+            matches!(
+                v.provider,
+                EncryptionProvider::Tpm | EncryptionProvider::Kms
+            )
         })
     }
 
@@ -363,8 +372,14 @@ mod tests {
         assert_eq!(CertificateInfo::format_time_remaining(365), "1y");
         assert_eq!(CertificateInfo::format_time_remaining(400), "1y 1m");
         assert_eq!(CertificateInfo::format_time_remaining(3650), "10y");
-        assert_eq!(CertificateInfo::format_time_remaining(-1), "expired 1 day ago");
-        assert_eq!(CertificateInfo::format_time_remaining(-30), "expired 30 days ago");
+        assert_eq!(
+            CertificateInfo::format_time_remaining(-1),
+            "expired 1 day ago"
+        );
+        assert_eq!(
+            CertificateInfo::format_time_remaining(-30),
+            "expired 30 days ago"
+        );
     }
 
     #[test]

@@ -63,28 +63,51 @@ pub mod proto {
 }
 
 pub use client::{
-    // Node info types
-    CpuStat, MemInfo, NodeCpuInfo, NodeLoadAvg, NodeMemory, NodeServices, NodeSystemStat,
-    ServiceHealth, ServiceInfo, ServiceRestartResult, TalosClient, VersionInfo,
-    // Etcd types
-    EtcdAlarm, EtcdAlarmType, EtcdMemberInfo, EtcdMemberStatus,
-    // Process types
-    NodeProcesses, ProcessInfo, ProcessState,
-    // Network types
-    NetDevRate, NetDevStats, NodeNetworkStats,
-    // Connection types
-    ConnectionCounts, ConnectionInfo, ConnectionState, NetstatFilter, NodeConnections,
     // Configuration types
-    ApplyConfigResult, ApplyMode,
+    ApplyConfigResult,
+    ApplyMode,
+    // Connection types
+    ConnectionCounts,
+    ConnectionInfo,
+    ConnectionState,
+    // Node info types
+    CpuStat,
+    // Etcd types
+    EtcdAlarm,
+    EtcdAlarmType,
+    EtcdMemberInfo,
+    EtcdMemberStatus,
+    MemInfo,
+    // Network types
+    NetDevRate,
+    NetDevStats,
+    NetstatFilter,
+    NodeConnections,
+    NodeCpuInfo,
+    NodeLoadAvg,
+    NodeMemory,
+    NodeNetworkStats,
+    // Process types
+    NodeProcesses,
+    NodeServices,
+    NodeSystemStat,
     // Time types
     NodeTimeInfo,
+    ProcessInfo,
+    ProcessState,
     // Operation types
-    RebootMode, RebootResult,
+    RebootMode,
+    RebootResult,
+    ServiceHealth,
+    ServiceInfo,
+    ServiceRestartResult,
+    TalosClient,
+    VersionInfo,
 };
 pub use config::{Context, TalosConfig};
 pub use error::TalosError;
 pub use talosctl::{
+    AddressStatus, DiscoveryMember, KubeSpanPeerStatus, MachineConfigInfo, VolumeStatus,
     get_address_status, get_discovery_members, get_discovery_members_for_context,
     get_kubespan_peers, get_machine_config, get_volume_status, is_kubespan_enabled,
-    AddressStatus, DiscoveryMember, KubeSpanPeerStatus, MachineConfigInfo, VolumeStatus,
 };

@@ -9,8 +9,8 @@ use crate::proto::machine::machine_service_client::MachineServiceClient;
 use crate::proto::machine::{EtcdMemberListRequest, LogsRequest, NetstatRequest, netstat_request};
 use crate::proto::time::time_service_client::TimeServiceClient;
 use tokio_stream::StreamExt;
-use tonic::transport::Channel;
 use tonic::Request;
+use tonic::transport::Channel;
 
 /// Link type for BPF filter generation.
 ///
@@ -82,15 +82,21 @@ impl TalosClient {
     ///
     /// The hostname field is only populated when going through the apid proxy.
     /// When connecting directly to a node, we fall back to the configured node address.
-    fn node_from_metadata(&self, metadata: Option<&crate::proto::common::Metadata>, index: usize) -> String {
+    fn node_from_metadata(
+        &self,
+        metadata: Option<&crate::proto::common::Metadata>,
+        index: usize,
+    ) -> String {
         metadata
             .map(|m| m.hostname.clone())
             .filter(|h| !h.is_empty())
             .unwrap_or_else(|| {
-                self.nodes.get(index)
+                self.nodes
+                    .get(index)
                     .map(|n| n.split(':').next().unwrap_or(n).to_string())
                     .unwrap_or_else(|| {
-                        self.nodes.first()
+                        self.nodes
+                            .first()
                             .map(|n| n.split(':').next().unwrap_or(n).to_string())
                             .unwrap_or_else(|| "node".to_string())
                     })
@@ -105,7 +111,9 @@ impl TalosClient {
         // When nodes is empty or same as endpoints, skip the header
         if !self.nodes.is_empty() {
             // Filter out localhost/127.0.0.1 entries as these are endpoint proxies
-            let valid_nodes: Vec<String> = self.nodes.iter()
+            let valid_nodes: Vec<String> = self
+                .nodes
+                .iter()
                 .filter(|n| !n.starts_with("127.0.0.1") && !n.starts_with("localhost"))
                 .map(|n| n.split(':').next().unwrap_or(n).to_string())
                 .collect();
@@ -132,17 +140,43 @@ impl TalosClient {
             .messages
             .into_iter()
             .enumerate()
-            .map(|(i, msg)| {
-                VersionInfo {
-                    node: self.node_from_metadata(msg.metadata.as_ref(), i),
-                    version: msg.version.as_ref().map(|v| v.tag.clone()).unwrap_or_default(),
-                    sha: msg.version.as_ref().map(|v| v.sha.clone()).unwrap_or_default(),
-                    built: msg.version.as_ref().map(|v| v.built.clone()).unwrap_or_default(),
-                    go_version: msg.version.as_ref().map(|v| v.go_version.clone()).unwrap_or_default(),
-                    os: msg.version.as_ref().map(|v| v.os.clone()).unwrap_or_default(),
-                    arch: msg.version.as_ref().map(|v| v.arch.clone()).unwrap_or_default(),
-                    platform: msg.platform.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
-                }
+            .map(|(i, msg)| VersionInfo {
+                node: self.node_from_metadata(msg.metadata.as_ref(), i),
+                version: msg
+                    .version
+                    .as_ref()
+                    .map(|v| v.tag.clone())
+                    .unwrap_or_default(),
+                sha: msg
+                    .version
+                    .as_ref()
+                    .map(|v| v.sha.clone())
+                    .unwrap_or_default(),
+                built: msg
+                    .version
+                    .as_ref()
+                    .map(|v| v.built.clone())
+                    .unwrap_or_default(),
+                go_version: msg
+                    .version
+                    .as_ref()
+                    .map(|v| v.go_version.clone())
+                    .unwrap_or_default(),
+                os: msg
+                    .version
+                    .as_ref()
+                    .map(|v| v.os.clone())
+                    .unwrap_or_default(),
+                arch: msg
+                    .version
+                    .as_ref()
+                    .map(|v| v.arch.clone())
+                    .unwrap_or_default(),
+                platform: msg
+                    .platform
+                    .as_ref()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default(),
             })
             .collect();
 
@@ -168,23 +202,21 @@ impl TalosClient {
             .enumerate()
             .map(|(i, msg)| {
                 let local_time = msg.localtime.map(|t| {
-                    std::time::UNIX_EPOCH + std::time::Duration::new(
-                        t.seconds as u64,
-                        t.nanos as u32,
-                    )
+                    std::time::UNIX_EPOCH
+                        + std::time::Duration::new(t.seconds as u64, t.nanos as u32)
                 });
                 let remote_time = msg.remotetime.map(|t| {
-                    std::time::UNIX_EPOCH + std::time::Duration::new(
-                        t.seconds as u64,
-                        t.nanos as u32,
-                    )
+                    std::time::UNIX_EPOCH
+                        + std::time::Duration::new(t.seconds as u64, t.nanos as u32)
                 });
 
                 // Calculate offset
                 let offset_seconds = match (msg.localtime, msg.remotetime) {
                     (Some(local), Some(remote)) => {
-                        let local_nanos = local.seconds as f64 * 1_000_000_000.0 + local.nanos as f64;
-                        let remote_nanos = remote.seconds as f64 * 1_000_000_000.0 + remote.nanos as f64;
+                        let local_nanos =
+                            local.seconds as f64 * 1_000_000_000.0 + local.nanos as f64;
+                        let remote_nanos =
+                            remote.seconds as f64 * 1_000_000_000.0 + remote.nanos as f64;
                         (local_nanos - remote_nanos) / 1_000_000_000.0
                     }
                     _ => 0.0,
@@ -241,7 +273,10 @@ impl TalosClient {
     /// Restart a service on all configured nodes
     ///
     /// Returns the response message from each node.
-    pub async fn service_restart(&self, service_id: &str) -> Result<Vec<ServiceRestartResult>, TalosError> {
+    pub async fn service_restart(
+        &self,
+        service_id: &str,
+    ) -> Result<Vec<ServiceRestartResult>, TalosError> {
         use crate::proto::machine::ServiceRestartRequest;
 
         let mut client = self.machine_client();
@@ -326,7 +361,11 @@ impl TalosClient {
             .into_iter()
             .map(|msg| {
                 let cpu_count = msg.cpu_info.len();
-                let model_name = msg.cpu_info.first().map(|c| c.model_name.clone()).unwrap_or_default();
+                let model_name = msg
+                    .cpu_info
+                    .first()
+                    .map(|c| c.model_name.clone())
+                    .unwrap_or_default();
                 let mhz = msg.cpu_info.first().map(|c| c.cpu_mhz).unwrap_or_default();
 
                 NodeCpuInfo {
@@ -353,16 +392,19 @@ impl TalosClient {
             .messages
             .into_iter()
             .map(|msg| {
-                let cpu_total = msg.cpu_total.map(|c| CpuStat {
-                    user: c.user,
-                    nice: c.nice,
-                    system: c.system,
-                    idle: c.idle,
-                    iowait: c.iowait,
-                    irq: c.irq,
-                    soft_irq: c.soft_irq,
-                    steal: c.steal,
-                }).unwrap_or_default();
+                let cpu_total = msg
+                    .cpu_total
+                    .map(|c| CpuStat {
+                        user: c.user,
+                        nice: c.nice,
+                        system: c.system,
+                        idle: c.idle,
+                        iowait: c.iowait,
+                        irq: c.irq,
+                        soft_irq: c.soft_irq,
+                        steal: c.steal,
+                    })
+                    .unwrap_or_default();
 
                 NodeSystemStat {
                     node: self.node_from_metadata(msg.metadata.as_ref(), 0),
@@ -422,7 +464,7 @@ impl TalosClient {
         let request = self.with_nodes(Request::new(LogsRequest {
             namespace: "system".to_string(),
             id: service_id.to_string(),
-            driver: 0, // CONTAINERD
+            driver: 0,    // CONTAINERD
             follow: true, // Enable streaming
             tail_lines,
         }));
@@ -527,9 +569,7 @@ impl TalosClient {
     /// Get etcd member list from control plane nodes
     pub async fn etcd_members(&self) -> Result<Vec<EtcdMemberInfo>, TalosError> {
         let mut client = self.machine_client();
-        let request = self.with_nodes(Request::new(EtcdMemberListRequest {
-            query_local: false,
-        }));
+        let request = self.with_nodes(Request::new(EtcdMemberListRequest { query_local: false }));
 
         let response = client.etcd_member_list(request).await?;
         let inner = response.into_inner();
@@ -637,7 +677,10 @@ impl TalosClient {
                 })
                 .collect();
 
-            result.push(NodeProcesses { hostname, processes });
+            result.push(NodeProcesses {
+                hostname,
+                processes,
+            });
         }
 
         Ok(result)
@@ -657,11 +700,8 @@ impl TalosClient {
 
             let total = msg.total.map(|t| NetDevStats::from_proto(&t));
 
-            let devices: Vec<NetDevStats> = msg
-                .devices
-                .iter()
-                .map(NetDevStats::from_proto)
-                .collect();
+            let devices: Vec<NetDevStats> =
+                msg.devices.iter().map(NetDevStats::from_proto).collect();
 
             result.push(NodeNetworkStats {
                 hostname,
@@ -800,9 +840,15 @@ impl TalosClient {
     /// This checks by reading /proc/sys/net/bridge/bridge-nf-call-iptables
     /// which only exists when br_netfilter is loaded.
     pub async fn is_br_netfilter_loaded(&self) -> Result<bool, TalosError> {
-        match self.read_file("/proc/sys/net/bridge/bridge-nf-call-iptables").await {
+        match self
+            .read_file("/proc/sys/net/bridge/bridge-nf-call-iptables")
+            .await
+        {
             Ok(content) => {
-                tracing::info!("br_netfilter sysctl file exists, content: {:?}", content.trim());
+                tracing::info!(
+                    "br_netfilter sysctl file exists, content: {:?}",
+                    content.trim()
+                );
                 Ok(true)
             }
             Err(e) => {
@@ -865,9 +911,9 @@ impl TalosClient {
             })?;
 
             // The kubeconfig file is typically named "kubeconfig" in the archive
-            let path = entry.path().map_err(|e| {
-                TalosError::Connection(format!("Failed to get entry path: {}", e))
-            })?;
+            let path = entry
+                .path()
+                .map_err(|e| TalosError::Connection(format!("Failed to get entry path: {}", e)))?;
 
             if path.to_string_lossy().contains("kubeconfig") {
                 let mut content = String::new();
@@ -1007,7 +1053,9 @@ impl TalosClient {
     ///
     /// Used for standard Ethernet interfaces (eth*, ens*, bond*, lo, etc.)
     /// Generated from: tcpdump -dd -y EN10MB 'not port 50000'
-    fn build_port_exclusion_filter_ethernet(port: u16) -> Vec<crate::proto::machine::BpfInstruction> {
+    fn build_port_exclusion_filter_ethernet(
+        port: u16,
+    ) -> Vec<crate::proto::machine::BpfInstruction> {
         use crate::proto::machine::BpfInstruction;
 
         let port_k = port as u32;
@@ -1016,53 +1064,173 @@ impl TalosClient {
         // Handles IPv4, IPv6, TCP, UDP, SCTP, and fragment checking
         vec![
             // (000) ldh [12]                  ; Load EtherType
-            BpfInstruction { op: 0x28, jt: 0, jf: 0, k: 0x0000000c },
+            BpfInstruction {
+                op: 0x28,
+                jt: 0,
+                jf: 0,
+                k: 0x0000000c,
+            },
             // (001) jeq #0x86dd, 0, 8         ; If IPv6, continue; else check IPv4
-            BpfInstruction { op: 0x15, jt: 0, jf: 8, k: 0x000086dd },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 8,
+                k: 0x000086dd,
+            },
             // (002) ldb [20]                  ; Load IPv6 next header
-            BpfInstruction { op: 0x30, jt: 0, jf: 0, k: 0x00000014 },
+            BpfInstruction {
+                op: 0x30,
+                jt: 0,
+                jf: 0,
+                k: 0x00000014,
+            },
             // (003) jeq #132, 2, 0            ; Check SCTP
-            BpfInstruction { op: 0x15, jt: 2, jf: 0, k: 0x00000084 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 2,
+                jf: 0,
+                k: 0x00000084,
+            },
             // (004) jeq #6, 1, 0              ; Check TCP
-            BpfInstruction { op: 0x15, jt: 1, jf: 0, k: 0x00000006 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 1,
+                jf: 0,
+                k: 0x00000006,
+            },
             // (005) jeq #17, 0, 17            ; Check UDP
-            BpfInstruction { op: 0x15, jt: 0, jf: 17, k: 0x00000011 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 17,
+                k: 0x00000011,
+            },
             // (006) ldh [54]                  ; Load IPv6 src port
-            BpfInstruction { op: 0x28, jt: 0, jf: 0, k: 0x00000036 },
+            BpfInstruction {
+                op: 0x28,
+                jt: 0,
+                jf: 0,
+                k: 0x00000036,
+            },
             // (007) jeq #port, 14, 0          ; If port matches, goto reject
-            BpfInstruction { op: 0x15, jt: 14, jf: 0, k: port_k },
+            BpfInstruction {
+                op: 0x15,
+                jt: 14,
+                jf: 0,
+                k: port_k,
+            },
             // (008) ldh [56]                  ; Load IPv6 dst port
-            BpfInstruction { op: 0x28, jt: 0, jf: 0, k: 0x00000038 },
+            BpfInstruction {
+                op: 0x28,
+                jt: 0,
+                jf: 0,
+                k: 0x00000038,
+            },
             // (009) jeq #port, 12, 13         ; If port matches, goto reject; else accept
-            BpfInstruction { op: 0x15, jt: 12, jf: 13, k: port_k },
+            BpfInstruction {
+                op: 0x15,
+                jt: 12,
+                jf: 13,
+                k: port_k,
+            },
             // (010) jeq #0x0800, 0, 12        ; Check IPv4
-            BpfInstruction { op: 0x15, jt: 0, jf: 12, k: 0x00000800 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 12,
+                k: 0x00000800,
+            },
             // (011) ldb [23]                  ; Load IPv4 protocol
-            BpfInstruction { op: 0x30, jt: 0, jf: 0, k: 0x00000017 },
+            BpfInstruction {
+                op: 0x30,
+                jt: 0,
+                jf: 0,
+                k: 0x00000017,
+            },
             // (012) jeq #132, 2, 0            ; Check SCTP
-            BpfInstruction { op: 0x15, jt: 2, jf: 0, k: 0x00000084 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 2,
+                jf: 0,
+                k: 0x00000084,
+            },
             // (013) jeq #6, 1, 0              ; Check TCP
-            BpfInstruction { op: 0x15, jt: 1, jf: 0, k: 0x00000006 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 1,
+                jf: 0,
+                k: 0x00000006,
+            },
             // (014) jeq #17, 0, 8             ; Check UDP
-            BpfInstruction { op: 0x15, jt: 0, jf: 8, k: 0x00000011 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 8,
+                k: 0x00000011,
+            },
             // (015) ldh [20]                  ; Load frag offset field
-            BpfInstruction { op: 0x28, jt: 0, jf: 0, k: 0x00000014 },
+            BpfInstruction {
+                op: 0x28,
+                jt: 0,
+                jf: 0,
+                k: 0x00000014,
+            },
             // (016) jset #0x1fff, 6, 0        ; Check if fragmented
-            BpfInstruction { op: 0x45, jt: 6, jf: 0, k: 0x00001fff },
+            BpfInstruction {
+                op: 0x45,
+                jt: 6,
+                jf: 0,
+                k: 0x00001fff,
+            },
             // (017) ldxb 4*([14]&0xf)         ; Load IP header length
-            BpfInstruction { op: 0xb1, jt: 0, jf: 0, k: 0x0000000e },
+            BpfInstruction {
+                op: 0xb1,
+                jt: 0,
+                jf: 0,
+                k: 0x0000000e,
+            },
             // (018) ldh [x+14]                ; Load src port
-            BpfInstruction { op: 0x48, jt: 0, jf: 0, k: 0x0000000e },
+            BpfInstruction {
+                op: 0x48,
+                jt: 0,
+                jf: 0,
+                k: 0x0000000e,
+            },
             // (019) jeq #port, 2, 0           ; If port matches, goto reject
-            BpfInstruction { op: 0x15, jt: 2, jf: 0, k: port_k },
+            BpfInstruction {
+                op: 0x15,
+                jt: 2,
+                jf: 0,
+                k: port_k,
+            },
             // (020) ldh [x+16]                ; Load dst port
-            BpfInstruction { op: 0x48, jt: 0, jf: 0, k: 0x00000010 },
+            BpfInstruction {
+                op: 0x48,
+                jt: 0,
+                jf: 0,
+                k: 0x00000010,
+            },
             // (021) jeq #port, 0, 1           ; If port matches, goto reject; else accept
-            BpfInstruction { op: 0x15, jt: 0, jf: 1, k: port_k },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 1,
+                k: port_k,
+            },
             // (022) ret #0                    ; Reject packet
-            BpfInstruction { op: 0x06, jt: 0, jf: 0, k: 0x00000000 },
+            BpfInstruction {
+                op: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x00000000,
+            },
             // (023) ret #262144               ; Accept packet
-            BpfInstruction { op: 0x06, jt: 0, jf: 0, k: 0x00040000 },
+            BpfInstruction {
+                op: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x00040000,
+            },
         ]
     }
 
@@ -1080,59 +1248,194 @@ impl TalosClient {
         // Handles IPv4, IPv6, TCP, UDP, SCTP, and fragment checking
         vec![
             // (000) ldb [0]                   ; Load IP version byte
-            BpfInstruction { op: 0x30, jt: 0, jf: 0, k: 0x00000000 },
+            BpfInstruction {
+                op: 0x30,
+                jt: 0,
+                jf: 0,
+                k: 0x00000000,
+            },
             // (001) and #0xf0                 ; Mask for IP version
-            BpfInstruction { op: 0x54, jt: 0, jf: 0, k: 0x000000f0 },
+            BpfInstruction {
+                op: 0x54,
+                jt: 0,
+                jf: 0,
+                k: 0x000000f0,
+            },
             // (002) jeq #0x60, 0, 8           ; If IPv6, continue; else check IPv4
-            BpfInstruction { op: 0x15, jt: 0, jf: 8, k: 0x00000060 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 8,
+                k: 0x00000060,
+            },
             // (003) ldb [6]                   ; Load IPv6 next header
-            BpfInstruction { op: 0x30, jt: 0, jf: 0, k: 0x00000006 },
+            BpfInstruction {
+                op: 0x30,
+                jt: 0,
+                jf: 0,
+                k: 0x00000006,
+            },
             // (004) jeq #132, 2, 0            ; Check SCTP
-            BpfInstruction { op: 0x15, jt: 2, jf: 0, k: 0x00000084 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 2,
+                jf: 0,
+                k: 0x00000084,
+            },
             // (005) jeq #6, 1, 0              ; Check TCP
-            BpfInstruction { op: 0x15, jt: 1, jf: 0, k: 0x00000006 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 1,
+                jf: 0,
+                k: 0x00000006,
+            },
             // (006) jeq #17, 0, 19            ; Check UDP
-            BpfInstruction { op: 0x15, jt: 0, jf: 19, k: 0x00000011 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 19,
+                k: 0x00000011,
+            },
             // (007) ldh [40]                  ; Load IPv6 src port
-            BpfInstruction { op: 0x28, jt: 0, jf: 0, k: 0x00000028 },
+            BpfInstruction {
+                op: 0x28,
+                jt: 0,
+                jf: 0,
+                k: 0x00000028,
+            },
             // (008) jeq #port, 16, 0          ; If port matches, goto reject
-            BpfInstruction { op: 0x15, jt: 16, jf: 0, k: port_k },
+            BpfInstruction {
+                op: 0x15,
+                jt: 16,
+                jf: 0,
+                k: port_k,
+            },
             // (009) ldh [42]                  ; Load IPv6 dst port
-            BpfInstruction { op: 0x28, jt: 0, jf: 0, k: 0x0000002a },
+            BpfInstruction {
+                op: 0x28,
+                jt: 0,
+                jf: 0,
+                k: 0x0000002a,
+            },
             // (010) jeq #port, 14, 15         ; If port matches, goto reject; else accept
-            BpfInstruction { op: 0x15, jt: 14, jf: 15, k: port_k },
+            BpfInstruction {
+                op: 0x15,
+                jt: 14,
+                jf: 15,
+                k: port_k,
+            },
             // (011) ldb [0]                   ; Load IP version byte again
-            BpfInstruction { op: 0x30, jt: 0, jf: 0, k: 0x00000000 },
+            BpfInstruction {
+                op: 0x30,
+                jt: 0,
+                jf: 0,
+                k: 0x00000000,
+            },
             // (012) and #0xf0                 ; Mask for IP version
-            BpfInstruction { op: 0x54, jt: 0, jf: 0, k: 0x000000f0 },
+            BpfInstruction {
+                op: 0x54,
+                jt: 0,
+                jf: 0,
+                k: 0x000000f0,
+            },
             // (013) jeq #0x40, 0, 12          ; Check IPv4
-            BpfInstruction { op: 0x15, jt: 0, jf: 12, k: 0x00000040 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 12,
+                k: 0x00000040,
+            },
             // (014) ldb [9]                   ; Load IPv4 protocol
-            BpfInstruction { op: 0x30, jt: 0, jf: 0, k: 0x00000009 },
+            BpfInstruction {
+                op: 0x30,
+                jt: 0,
+                jf: 0,
+                k: 0x00000009,
+            },
             // (015) jeq #132, 2, 0            ; Check SCTP
-            BpfInstruction { op: 0x15, jt: 2, jf: 0, k: 0x00000084 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 2,
+                jf: 0,
+                k: 0x00000084,
+            },
             // (016) jeq #6, 1, 0              ; Check TCP
-            BpfInstruction { op: 0x15, jt: 1, jf: 0, k: 0x00000006 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 1,
+                jf: 0,
+                k: 0x00000006,
+            },
             // (017) jeq #17, 0, 8             ; Check UDP
-            BpfInstruction { op: 0x15, jt: 0, jf: 8, k: 0x00000011 },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 8,
+                k: 0x00000011,
+            },
             // (018) ldh [6]                   ; Load frag offset field
-            BpfInstruction { op: 0x28, jt: 0, jf: 0, k: 0x00000006 },
+            BpfInstruction {
+                op: 0x28,
+                jt: 0,
+                jf: 0,
+                k: 0x00000006,
+            },
             // (019) jset #0x1fff, 6, 0        ; Check if fragmented
-            BpfInstruction { op: 0x45, jt: 6, jf: 0, k: 0x00001fff },
+            BpfInstruction {
+                op: 0x45,
+                jt: 6,
+                jf: 0,
+                k: 0x00001fff,
+            },
             // (020) ldxb 4*([0]&0xf)          ; Load IP header length
-            BpfInstruction { op: 0xb1, jt: 0, jf: 0, k: 0x00000000 },
+            BpfInstruction {
+                op: 0xb1,
+                jt: 0,
+                jf: 0,
+                k: 0x00000000,
+            },
             // (021) ldh [x+0]                 ; Load src port
-            BpfInstruction { op: 0x48, jt: 0, jf: 0, k: 0x00000000 },
+            BpfInstruction {
+                op: 0x48,
+                jt: 0,
+                jf: 0,
+                k: 0x00000000,
+            },
             // (022) jeq #port, 2, 0           ; If port matches, goto reject
-            BpfInstruction { op: 0x15, jt: 2, jf: 0, k: port_k },
+            BpfInstruction {
+                op: 0x15,
+                jt: 2,
+                jf: 0,
+                k: port_k,
+            },
             // (023) ldh [x+2]                 ; Load dst port
-            BpfInstruction { op: 0x48, jt: 0, jf: 0, k: 0x00000002 },
+            BpfInstruction {
+                op: 0x48,
+                jt: 0,
+                jf: 0,
+                k: 0x00000002,
+            },
             // (024) jeq #port, 0, 1           ; If port matches, goto reject; else accept
-            BpfInstruction { op: 0x15, jt: 0, jf: 1, k: port_k },
+            BpfInstruction {
+                op: 0x15,
+                jt: 0,
+                jf: 1,
+                k: port_k,
+            },
             // (025) ret #0                    ; Reject packet
-            BpfInstruction { op: 0x06, jt: 0, jf: 0, k: 0x00000000 },
+            BpfInstruction {
+                op: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x00000000,
+            },
             // (026) ret #262144               ; Accept packet
-            BpfInstruction { op: 0x06, jt: 0, jf: 0, k: 0x00040000 },
+            BpfInstruction {
+                op: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x00040000,
+            },
         ]
     }
 
@@ -1205,7 +1508,8 @@ impl TalosClient {
         let msg = inner.messages.into_iter().next();
 
         Ok(RebootResult {
-            node: msg.as_ref()
+            node: msg
+                .as_ref()
                 .and_then(|m| m.metadata.as_ref())
                 .map(|m| m.hostname.clone())
                 .unwrap_or_else(|| self.nodes.first().cloned().unwrap_or_default()),
@@ -1374,7 +1678,14 @@ pub struct CpuStat {
 impl CpuStat {
     /// Calculate total CPU time (all fields)
     pub fn total(&self) -> f64 {
-        self.user + self.nice + self.system + self.idle + self.iowait + self.irq + self.soft_irq + self.steal
+        self.user
+            + self.nice
+            + self.system
+            + self.idle
+            + self.iowait
+            + self.irq
+            + self.soft_irq
+            + self.steal
     }
 
     /// Calculate busy time (non-idle)
@@ -1932,7 +2243,12 @@ impl ConnectionCounts {
 
     /// Total number of connections
     pub fn total(&self) -> usize {
-        self.established + self.listen + self.time_wait + self.close_wait + self.syn_sent + self.other
+        self.established
+            + self.listen
+            + self.time_wait
+            + self.close_wait
+            + self.syn_sent
+            + self.other
     }
 
     /// Check if there are any warning conditions
@@ -1971,7 +2287,8 @@ pub struct ConnectionInfo {
 impl ConnectionInfo {
     fn from_proto(record: crate::proto::machine::ConnectRecord) -> Self {
         // Extract process info if available
-        let (process_pid, process_name) = record.process
+        let (process_pid, process_name) = record
+            .process
             .map(|p| (Some(p.pid), Some(p.name)))
             .unwrap_or((None, None));
 
@@ -2119,10 +2436,6 @@ impl NodeTimeInfo {
 
     /// Get sync status as a string
     pub fn sync_status(&self) -> &'static str {
-        if self.synced {
-            "synced"
-        } else {
-            "not synced"
-        }
+        if self.synced { "synced" } else { "not synced" }
     }
 }

@@ -7,19 +7,19 @@ use crate::components::Component;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
-    Frame,
 };
 use std::collections::HashMap;
 use std::time::Instant;
 use talos_pilot_core::constants::MAX_CAPTURE_SIZE;
-use talos_pilot_core::{format_bytes, AsyncState};
+use talos_pilot_core::{AsyncState, format_bytes};
 use talos_rs::{
-    get_kubespan_peers, is_kubespan_enabled, ConnectionCounts, ConnectionInfo, ConnectionState,
-    KubeSpanPeerStatus, NetDevRate, NetDevStats, NetstatFilter, ServiceInfo, TalosClient,
+    ConnectionCounts, ConnectionInfo, ConnectionState, KubeSpanPeerStatus, NetDevRate, NetDevStats,
+    NetstatFilter, ServiceInfo, TalosClient, get_kubespan_peers, is_kubespan_enabled,
 };
 
 /// Well-known Talos/Kubernetes service ports
@@ -34,8 +34,8 @@ const AUTO_REFRESH_INTERVAL_SECS: u64 = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortBy {
     #[default]
-    Traffic,  // rx_bytes + tx_bytes descending
-    Errors,   // errors + dropped descending
+    Traffic, // rx_bytes + tx_bytes descending
+    Errors, // errors + dropped descending
 }
 
 impl SortBy {
@@ -51,9 +51,9 @@ impl SortBy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
     #[default]
-    Interfaces,   // Main view showing interfaces
-    Connections,  // Drill-down view showing connections
-    KubeSpan,     // KubeSpan peer status
+    Interfaces, // Main view showing interfaces
+    Connections, // Drill-down view showing connections
+    KubeSpan,    // KubeSpan peer status
 }
 
 impl ViewMode {
@@ -91,8 +91,8 @@ impl ViewMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConnSortBy {
     #[default]
-    State,  // Sort by connection state
-    Port,   // Sort by local port
+    State, // Sort by connection state
+    Port, // Sort by local port
 }
 
 /// Pending action requiring confirmation
@@ -382,7 +382,10 @@ impl NetworkStatsComponent {
                 }
             }
             Ok(Err(e)) => {
-                self.set_error(format!("Failed to fetch network stats: {} (node: {})", e, self.address));
+                self.set_error(format!(
+                    "Failed to fetch network stats: {} (node: {})",
+                    e, self.address
+                ));
                 return Ok(());
             }
             Err(_) => {
@@ -422,7 +425,8 @@ impl NetworkStatsComponent {
             Ok(Ok(svc_data)) => {
                 if let Some(node_svcs) = svc_data.into_iter().next() {
                     if let Some(data) = self.data_mut() {
-                        data.services = node_svcs.services
+                        data.services = node_svcs
+                            .services
                             .into_iter()
                             .map(|s| (s.id.clone(), s))
                             .collect();
@@ -489,7 +493,8 @@ impl NetworkStatsComponent {
                 if peer_count > 0 && self.kubespan_selected >= peer_count {
                     self.kubespan_selected = 0;
                 }
-                self.kubespan_table_state.select(Some(self.kubespan_selected));
+                self.kubespan_table_state
+                    .select(Some(self.kubespan_selected));
             }
             Err(_) => {
                 // Task panicked, leave data as-is
@@ -515,9 +520,10 @@ impl NetworkStatsComponent {
 
         for port in key_ports {
             // Check if port is listening
-            let is_listening = data.connections.iter().any(|c| {
-                c.local_port == *port as u32 && c.state == ConnectionState::Listen
-            });
+            let is_listening = data
+                .connections
+                .iter()
+                .any(|c| c.local_port == *port as u32 && c.state == ConnectionState::Listen);
             data.service_health.insert(*port, is_listening);
         }
     }
@@ -528,7 +534,8 @@ impl NetworkStatsComponent {
         let Some(data) = self.data_mut() else { return };
 
         let now = Instant::now();
-        let elapsed_secs = data.last_sample
+        let elapsed_secs = data
+            .last_sample
             .map(|t| now.duration_since(t).as_secs_f64())
             .unwrap_or(0.0);
 
@@ -630,16 +637,20 @@ impl NetworkStatsComponent {
 
     /// Get selected device name
     fn selected_device_name(&self) -> Option<String> {
-        self.data().and_then(|d| d.devices.get(self.selected).map(|dev| dev.name.clone()))
+        self.data()
+            .and_then(|d| d.devices.get(self.selected).map(|dev| dev.name.clone()))
     }
 
     /// Get filtered and sorted connections for display
     /// Uses pre-filtered connections based on selected interface
     fn get_filtered_connections(&self) -> Vec<ConnectionInfo> {
-        let Some(data) = self.data() else { return Vec::new() };
+        let Some(data) = self.data() else {
+            return Vec::new();
+        };
 
         // Use the pre-filtered list (filtered by interface) unless showing all
-        let source: Vec<_> = if self.show_all_connections || self.view_mode == ViewMode::Interfaces {
+        let source: Vec<_> = if self.show_all_connections || self.view_mode == ViewMode::Interfaces
+        {
             // Show all connections
             data.connections.iter().cloned().collect()
         } else {
@@ -647,7 +658,8 @@ impl NetworkStatsComponent {
             self.filtered_connections.clone()
         };
 
-        let mut conns: Vec<_> = source.into_iter()
+        let mut conns: Vec<_> = source
+            .into_iter()
             .filter(|c| !self.listening_only || c.state == ConnectionState::Listen)
             .collect();
 
@@ -663,7 +675,8 @@ impl NetworkStatsComponent {
                         ConnectionState::SynSent => 4,
                         _ => 5,
                     };
-                    priority(&a.state).cmp(&priority(&b.state))
+                    priority(&a.state)
+                        .cmp(&priority(&b.state))
                         .then_with(|| a.local_port.cmp(&b.local_port))
                 });
             }
@@ -737,7 +750,9 @@ impl NetworkStatsComponent {
             return;
         };
 
-        self.filtered_connections = data.connections.iter()
+        self.filtered_connections = data
+            .connections
+            .iter()
             .filter(|conn| Self::connection_matches_interface(conn, iface))
             .cloned()
             .collect();
@@ -748,33 +763,28 @@ impl NetworkStatsComponent {
         match iface {
             // Loopback - connections to/from localhost
             "lo" => {
-                conn.local_ip.starts_with("127.") ||
-                conn.local_ip == "::1" ||
-                conn.remote_ip.starts_with("127.") ||
-                conn.remote_ip == "::1"
+                conn.local_ip.starts_with("127.")
+                    || conn.local_ip == "::1"
+                    || conn.remote_ip.starts_with("127.")
+                    || conn.remote_ip == "::1"
             }
             // CNI bridge - pod network connections (typically 10.x.x.x)
-            "cni0" => {
-                conn.local_ip.starts_with("10.") ||
-                conn.remote_ip.starts_with("10.")
-            }
+            "cni0" => conn.local_ip.starts_with("10.") || conn.remote_ip.starts_with("10."),
             // Flannel overlay - also pod network
             name if name.starts_with("flannel") => {
-                conn.local_ip.starts_with("10.") ||
-                conn.remote_ip.starts_with("10.")
+                conn.local_ip.starts_with("10.") || conn.remote_ip.starts_with("10.")
             }
             // Veth pairs - pod connections
             name if name.starts_with("veth") => {
-                conn.local_ip.starts_with("10.") ||
-                conn.remote_ip.starts_with("10.")
+                conn.local_ip.starts_with("10.") || conn.remote_ip.starts_with("10.")
             }
             // Main interface (eth0, enp0s*, etc.) - non-loopback, non-pod connections
             _ => {
                 // Exclude loopback
-                let is_loopback = conn.local_ip.starts_with("127.") ||
-                    conn.local_ip == "::1" ||
-                    conn.remote_ip.starts_with("127.") ||
-                    conn.remote_ip == "::1";
+                let is_loopback = conn.local_ip.starts_with("127.")
+                    || conn.local_ip == "::1"
+                    || conn.remote_ip.starts_with("127.")
+                    || conn.remote_ip == "::1";
 
                 // Include all external connections and listeners on 0.0.0.0
                 !is_loopback || conn.local_ip == "0.0.0.0" || conn.local_ip == "::"
@@ -799,7 +809,10 @@ impl NetworkStatsComponent {
     /// Get the selection range (start, end) inclusive
     fn conn_selection_range(&self) -> Option<(usize, usize)> {
         self.conn_selection_start.map(|anchor| {
-            (anchor.min(self.conn_selected), anchor.max(self.conn_selected))
+            (
+                anchor.min(self.conn_selected),
+                anchor.max(self.conn_selected),
+            )
         })
     }
 
@@ -866,7 +879,8 @@ impl NetworkStatsComponent {
                 .collect()
         } else {
             // Yank current connection only
-            conns.get(self.conn_selected)
+            conns
+                .get(self.conn_selected)
                 .map(|c| vec![Self::format_connection(c)])
                 .unwrap_or_default()
         };
@@ -920,7 +934,10 @@ impl NetworkStatsComponent {
 
     /// Draw the header
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
-        let device_count = format!("{} ifaces", self.data().map(|d| d.devices.len()).unwrap_or(0));
+        let device_count = format!(
+            "{} ifaces",
+            self.data().map(|d| d.devices.len()).unwrap_or(0)
+        );
 
         let auto_indicator = if self.auto_refresh { "" } else { " [AUTO:OFF]" };
 
@@ -967,8 +984,16 @@ impl NetworkStatsComponent {
 
     /// Draw the summary bar
     fn draw_summary_bar(&self, frame: &mut Frame, area: Rect) {
-        let (total_errors, total_dropped, total_rx_rate, total_tx_rate) = self.data()
-            .map(|d| (d.total_errors, d.total_dropped, d.total_rx_rate, d.total_tx_rate))
+        let (total_errors, total_dropped, total_rx_rate, total_tx_rate) = self
+            .data()
+            .map(|d| {
+                (
+                    d.total_errors,
+                    d.total_dropped,
+                    d.total_rx_rate,
+                    d.total_tx_rate,
+                )
+            })
             .unwrap_or((0, 0, 0, 0));
 
         let has_errors = total_errors > 0 || total_dropped > 0;
@@ -978,7 +1003,12 @@ impl NetworkStatsComponent {
         let tx_rate = NetDevStats::format_rate(total_tx_rate);
 
         let mut spans = vec![
-            Span::styled(warning, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                warning,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Total:  ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled("RX ", Style::default().fg(Color::Green)),
             Span::raw(&rx_rate),
@@ -994,7 +1024,10 @@ impl NetworkStatsComponent {
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        spans.push(Span::styled(format!("Errors: {}", total_errors), errors_style));
+        spans.push(Span::styled(
+            format!("Errors: {}", total_errors),
+            errors_style,
+        ));
 
         spans.push(Span::raw("   "));
         let dropped_style = if total_dropped > 0 {
@@ -1002,7 +1035,10 @@ impl NetworkStatsComponent {
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        spans.push(Span::styled(format!("Dropped: {}", total_dropped), dropped_style));
+        spans.push(Span::styled(
+            format!("Dropped: {}", total_dropped),
+            dropped_style,
+        ));
 
         let summary = Paragraph::new(Line::from(spans));
         frame.render_widget(summary, area);
@@ -1010,14 +1046,20 @@ impl NetworkStatsComponent {
 
     /// Draw the connection summary bar
     fn draw_connection_summary(&self, frame: &mut Frame, area: Rect) {
-        let cc = self.data()
+        let cc = self
+            .data()
             .map(|d| d.conn_counts.clone())
             .unwrap_or_default();
         let has_warnings = cc.has_warnings();
         let warning = if has_warnings { "! " } else { "" };
 
         let mut spans = vec![
-            Span::styled(warning, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                warning,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Conns: ", Style::default().add_modifier(Modifier::BOLD)),
         ];
 
@@ -1044,7 +1086,10 @@ impl NetworkStatsComponent {
             Style::default()
         };
         spans.push(Span::styled(format!("{} ", cc.time_wait), tw_style));
-        spans.push(Span::styled("TIME_WAIT", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "TIME_WAIT",
+            Style::default().fg(Color::DarkGray),
+        ));
         spans.push(Span::raw("  "));
 
         // CLOSE_WAIT count (red if > 0)
@@ -1054,7 +1099,10 @@ impl NetworkStatsComponent {
             Style::default()
         };
         spans.push(Span::styled(format!("{} ", cc.close_wait), cw_style));
-        spans.push(Span::styled("CLOSE_WAIT", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "CLOSE_WAIT",
+            Style::default().fg(Color::DarkGray),
+        ));
 
         let summary = Paragraph::new(Line::from(spans));
         frame.render_widget(summary, area);
@@ -1071,7 +1119,8 @@ impl NetworkStatsComponent {
             ("Controller", 10257),
         ];
 
-        let service_health = self.data()
+        let service_health = self
+            .data()
             .map(|d| d.service_health.clone())
             .unwrap_or_default();
 
@@ -1101,7 +1150,8 @@ impl NetworkStatsComponent {
     fn draw_warning(&self, frame: &mut Frame, area: Rect) {
         let mut messages = Vec::new();
 
-        let (total_errors, total_dropped, conn_counts) = self.data()
+        let (total_errors, total_dropped, conn_counts) = self
+            .data()
             .map(|d| (d.total_errors, d.total_dropped, d.conn_counts.clone()))
             .unwrap_or_default();
 
@@ -1126,7 +1176,12 @@ impl NetworkStatsComponent {
 
         if !messages.is_empty() {
             let warning = Paragraph::new(Line::from(vec![
-                Span::styled("! ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "! ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(messages.join(" | "), Style::default().fg(Color::Yellow)),
             ]));
             frame.render_widget(warning, area);
@@ -1136,8 +1191,16 @@ impl NetworkStatsComponent {
     /// Draw the device table
     fn draw_device_table(&mut self, frame: &mut Frame, area: Rect) {
         // Build column headers with sort indicators
-        let rx_rate_header = if self.sort_by == SortBy::Traffic { "RX RATE▼" } else { "RX RATE" };
-        let rx_err_header = if self.sort_by == SortBy::Errors { "RX ERR▼" } else { "RX ERR" };
+        let rx_rate_header = if self.sort_by == SortBy::Traffic {
+            "RX RATE▼"
+        } else {
+            "RX RATE"
+        };
+        let rx_err_header = if self.sort_by == SortBy::Errors {
+            "RX ERR▼"
+        } else {
+            "RX ERR"
+        };
 
         let header_cells = [
             Cell::from("INTERFACE"),
@@ -1154,72 +1217,78 @@ impl NetworkStatsComponent {
 
         // Get data for building rows
         let Some(data) = self.data() else {
-            let table = Table::new(Vec::<Row>::new(), [Constraint::Fill(1)])
-                .header(header);
+            let table = Table::new(Vec::<Row>::new(), [Constraint::Fill(1)]).header(header);
             frame.render_stateful_widget(table, area, &mut self.table_state);
             return;
         };
 
-        let rows: Vec<Row> = data.devices.iter().enumerate().map(|(idx, dev)| {
-            let rate = data.rates.get(&dev.name);
-            let rx_rate = rate.map(|r| NetDevStats::format_rate(r.rx_bytes_per_sec))
-                .unwrap_or_else(|| "0 B/s".to_string());
-            let tx_rate = rate.map(|r| NetDevStats::format_rate(r.tx_bytes_per_sec))
-                .unwrap_or_else(|| "0 B/s".to_string());
+        let rows: Vec<Row> = data
+            .devices
+            .iter()
+            .enumerate()
+            .map(|(idx, dev)| {
+                let rate = data.rates.get(&dev.name);
+                let rx_rate = rate
+                    .map(|r| NetDevStats::format_rate(r.rx_bytes_per_sec))
+                    .unwrap_or_else(|| "0 B/s".to_string());
+                let tx_rate = rate
+                    .map(|r| NetDevStats::format_rate(r.tx_bytes_per_sec))
+                    .unwrap_or_else(|| "0 B/s".to_string());
 
-            let has_errors = dev.has_errors();
-            let is_selected = idx == self.selected;
+                let has_errors = dev.has_errors();
+                let is_selected = idx == self.selected;
 
-            // Row style based on errors and selection
-            let row_style = if has_errors {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-            } else if is_selected {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+                // Row style based on errors and selection
+                let row_style = if has_errors {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                } else if is_selected {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
 
-            // Error column styles
-            let rx_err_style = if dev.rx_errors > 0 {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            let tx_err_style = if dev.tx_errors > 0 {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            let rx_drop_style = if dev.rx_dropped > 0 {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            let tx_drop_style = if dev.tx_dropped > 0 {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
+                // Error column styles
+                let rx_err_style = if dev.rx_errors > 0 {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                let tx_err_style = if dev.tx_errors > 0 {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                let rx_drop_style = if dev.rx_dropped > 0 {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                let tx_drop_style = if dev.tx_dropped > 0 {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
 
-            Row::new([
-                Cell::from(dev.name.clone()).style(row_style),
-                Cell::from(rx_rate).style(Style::default().fg(Color::Green)),
-                Cell::from(tx_rate).style(Style::default().fg(Color::Blue)),
-                Cell::from(dev.rx_errors.to_string()).style(rx_err_style),
-                Cell::from(dev.tx_errors.to_string()).style(tx_err_style),
-                Cell::from(dev.rx_dropped.to_string()).style(rx_drop_style),
-                Cell::from(dev.tx_dropped.to_string()).style(tx_drop_style),
-            ])
-        }).collect();
+                Row::new([
+                    Cell::from(dev.name.clone()).style(row_style),
+                    Cell::from(rx_rate).style(Style::default().fg(Color::Green)),
+                    Cell::from(tx_rate).style(Style::default().fg(Color::Blue)),
+                    Cell::from(dev.rx_errors.to_string()).style(rx_err_style),
+                    Cell::from(dev.tx_errors.to_string()).style(tx_err_style),
+                    Cell::from(dev.rx_dropped.to_string()).style(rx_drop_style),
+                    Cell::from(dev.tx_dropped.to_string()).style(tx_drop_style),
+                ])
+            })
+            .collect();
 
         let widths = [
-            Constraint::Length(14),   // INTERFACE
-            Constraint::Length(12),   // RX RATE
-            Constraint::Length(12),   // TX RATE
-            Constraint::Length(8),    // RX ERR
-            Constraint::Length(8),    // TX ERR
-            Constraint::Length(8),    // RX DROP
-            Constraint::Length(8),    // TX DROP
+            Constraint::Length(14), // INTERFACE
+            Constraint::Length(12), // RX RATE
+            Constraint::Length(12), // TX RATE
+            Constraint::Length(8),  // RX ERR
+            Constraint::Length(8),  // TX ERR
+            Constraint::Length(8),  // RX DROP
+            Constraint::Length(8),  // TX DROP
         ];
 
         let table = Table::new(rows, widths)
@@ -1245,9 +1314,11 @@ impl NetworkStatsComponent {
         };
 
         let rate = data.rates.get(&dev.name);
-        let rx_rate = rate.map(|r| NetDevStats::format_rate(r.rx_bytes_per_sec))
+        let rx_rate = rate
+            .map(|r| NetDevStats::format_rate(r.rx_bytes_per_sec))
             .unwrap_or_else(|| "0 B/s".to_string());
-        let tx_rate = rate.map(|r| NetDevStats::format_rate(r.tx_bytes_per_sec))
+        let tx_rate = rate
+            .map(|r| NetDevStats::format_rate(r.tx_bytes_per_sec))
             .unwrap_or_else(|| "0 B/s".to_string());
 
         let rx_total = NetDevStats::format_bytes(dev.rx_bytes);
@@ -1262,28 +1333,68 @@ impl NetworkStatsComponent {
 
         let mut lines = vec![
             Line::from(vec![
-                Span::styled("RX: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "RX: ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!("{} total", rx_total)),
-                Span::styled(format!(" ({})", rx_rate), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" ({})", rx_rate),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::raw(format!("    Packets: {}M", dev.rx_packets / 1_000_000)),
                 Span::raw("    "),
-                Span::styled(format!("Errors: {}", dev.rx_errors),
-                    if dev.rx_errors > 0 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::DarkGray) }),
+                Span::styled(
+                    format!("Errors: {}", dev.rx_errors),
+                    if dev.rx_errors > 0 {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
                 Span::raw("    "),
-                Span::styled(format!("Dropped: {}", dev.rx_dropped),
-                    if dev.rx_dropped > 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) }),
+                Span::styled(
+                    format!("Dropped: {}", dev.rx_dropped),
+                    if dev.rx_dropped > 0 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
             ]),
             Line::from(vec![
-                Span::styled("TX: ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "TX: ",
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!("{} total", tx_total)),
-                Span::styled(format!(" ({})", tx_rate), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" ({})", tx_rate),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::raw(format!("    Packets: {}M", dev.tx_packets / 1_000_000)),
                 Span::raw("    "),
-                Span::styled(format!("Errors: {}", dev.tx_errors),
-                    if dev.tx_errors > 0 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::DarkGray) }),
+                Span::styled(
+                    format!("Errors: {}", dev.tx_errors),
+                    if dev.tx_errors > 0 {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
                 Span::raw("    "),
-                Span::styled(format!("Dropped: {}", dev.tx_dropped),
-                    if dev.tx_dropped > 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) }),
+                Span::styled(
+                    format!("Dropped: {}", dev.tx_dropped),
+                    if dev.tx_dropped > 0 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
             ]),
         ];
 
@@ -1291,16 +1402,34 @@ impl NetworkStatsComponent {
         if !data.connections.is_empty() {
             let cc = &data.conn_counts;
             lines.push(Line::from(vec![
-                Span::styled("Connections: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{} ", cc.established), Style::default().fg(Color::Green)),
+                Span::styled(
+                    "Connections: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{} ", cc.established),
+                    Style::default().fg(Color::Green),
+                ),
                 Span::styled("EST  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{} ", cc.listen), Style::default().fg(Color::Cyan)),
                 Span::styled("LISTEN  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{} ", cc.time_wait),
-                    if cc.time_wait > 100 { Style::default().fg(Color::Yellow) } else { Style::default() }),
+                Span::styled(
+                    format!("{} ", cc.time_wait),
+                    if cc.time_wait > 100 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default()
+                    },
+                ),
                 Span::styled("TIME_WAIT  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{} ", cc.close_wait),
-                    if cc.close_wait > 0 { Style::default().fg(Color::Red) } else { Style::default() }),
+                Span::styled(
+                    format!("{} ", cc.close_wait),
+                    if cc.close_wait > 0 {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        Style::default()
+                    },
+                ),
                 Span::styled("CLOSE_WAIT", Style::default().fg(Color::DarkGray)),
             ]));
         }
@@ -1308,8 +1437,16 @@ impl NetworkStatsComponent {
         // Add warning line if there are errors
         if has_errors {
             lines.push(Line::from(vec![
-                Span::styled("! ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled("Interface has errors - check cable/driver/hardware", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    "! ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "Interface has errors - check cable/driver/hardware",
+                    Style::default().fg(Color::Yellow),
+                ),
             ]));
         }
 
@@ -1330,7 +1467,11 @@ impl NetworkStatsComponent {
 
     /// Draw the footer with keybindings (interfaces view)
     fn draw_footer(&self, frame: &mut Frame, area: Rect) {
-        let auto_label = if self.auto_refresh { "auto:ON" } else { "auto:OFF" };
+        let auto_label = if self.auto_refresh {
+            "auto:ON"
+        } else {
+            "auto:OFF"
+        };
 
         // BPF filter indicator with color coding
         let (bpf_label, bpf_color) = if self.capture.use_bpf_filter {
@@ -1356,8 +1497,7 @@ impl NetworkStatsComponent {
             Span::raw(" back"),
         ];
 
-        let footer = Paragraph::new(Line::from(spans))
-            .style(Style::default().fg(Color::DarkGray));
+        let footer = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(footer, area);
     }
 
@@ -1366,25 +1506,44 @@ impl NetworkStatsComponent {
     /// Draw the connection view header
     fn draw_conn_header(&self, frame: &mut Frame, area: Rect) {
         let conn_count = self.get_filtered_connections().len();
-        let filter_label = if self.listening_only { " [LISTEN ONLY]" } else { "" };
+        let filter_label = if self.listening_only {
+            " [LISTEN ONLY]"
+        } else {
+            ""
+        };
 
         // Show interface name or "all" if showing all connections
         let iface_display = if self.show_all_connections {
             "all".to_string()
         } else {
-            self.selected_interface.clone().unwrap_or_else(|| "all".to_string())
+            self.selected_interface
+                .clone()
+                .unwrap_or_else(|| "all".to_string())
         };
 
         // Connections is a subscreen of Interfaces - show breadcrumb style
         let mut spans = vec![
             Span::styled("Interfaces", Style::default().fg(Color::DarkGray)),
             Span::styled(" > ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Connections: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(&iface_display, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Connections: ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                &iface_display,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" @ ", Style::default().fg(Color::DarkGray)),
             Span::raw(&self.hostname),
             Span::raw("  "),
-            Span::styled(format!("{} connections", conn_count), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} connections", conn_count),
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled(filter_label, Style::default().fg(Color::Yellow)),
         ];
 
@@ -1394,7 +1553,9 @@ impl NetworkStatsComponent {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 format!("-- VISUAL ({} lines) --", count),
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             ));
         }
 
@@ -1404,23 +1565,39 @@ impl NetworkStatsComponent {
 
     /// Draw the connection summary bar
     fn draw_conn_summary_bar(&self, frame: &mut Frame, area: Rect) {
-        let cc = self.data()
+        let cc = self
+            .data()
             .map(|d| d.conn_counts.clone())
             .unwrap_or_default();
 
         let spans = vec![
-            Span::styled(format!("{} ", cc.established), Style::default().fg(Color::Green)),
+            Span::styled(
+                format!("{} ", cc.established),
+                Style::default().fg(Color::Green),
+            ),
             Span::styled("ESTABLISHED", Style::default().fg(Color::DarkGray)),
             Span::raw("   "),
             Span::styled(format!("{} ", cc.listen), Style::default().fg(Color::Cyan)),
             Span::styled("LISTEN", Style::default().fg(Color::DarkGray)),
             Span::raw("   "),
-            Span::styled(format!("{} ", cc.time_wait),
-                if cc.time_wait > 100 { Style::default().fg(Color::Yellow) } else { Style::default() }),
+            Span::styled(
+                format!("{} ", cc.time_wait),
+                if cc.time_wait > 100 {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                },
+            ),
             Span::styled("TIME_WAIT", Style::default().fg(Color::DarkGray)),
             Span::raw("   "),
-            Span::styled(format!("{} ", cc.close_wait),
-                if cc.close_wait > 0 { Style::default().fg(Color::Red) } else { Style::default() }),
+            Span::styled(
+                format!("{} ", cc.close_wait),
+                if cc.close_wait > 0 {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default()
+                },
+            ),
             Span::styled("CLOSE_WAIT", Style::default().fg(Color::DarkGray)),
         ];
 
@@ -1434,8 +1611,16 @@ impl NetworkStatsComponent {
         self.conn_viewport_height = area.height;
 
         // Build column headers with sort indicators
-        let state_header = if self.conn_sort_by == ConnSortBy::State { "STATE▼" } else { "STATE" };
-        let local_header = if self.conn_sort_by == ConnSortBy::Port { "LOCAL▼" } else { "LOCAL" };
+        let state_header = if self.conn_sort_by == ConnSortBy::State {
+            "STATE▼"
+        } else {
+            "STATE"
+        };
+        let local_header = if self.conn_sort_by == ConnSortBy::Port {
+            "LOCAL▼"
+        } else {
+            "LOCAL"
+        };
 
         let header_cells = [
             Cell::from("PROTO"),
@@ -1452,99 +1637,116 @@ impl NetworkStatsComponent {
         let in_visual = self.conn_in_visual_mode();
 
         // Extract data needed for the closure
-        let time_wait_count = self.data()
-            .map(|d| d.conn_counts.time_wait)
-            .unwrap_or(0);
-        let services = self.data()
-            .map(|d| d.services.clone())
-            .unwrap_or_default();
+        let time_wait_count = self.data().map(|d| d.conn_counts.time_wait).unwrap_or(0);
+        let services = self.data().map(|d| d.services.clone()).unwrap_or_default();
 
-        let rows: Vec<Row> = conns.iter().enumerate().map(|(idx, conn)| {
-            // Format local address with IP
-            let local = if !conn.local_ip.is_empty() && conn.local_port > 0 {
-                format!("{}:{}", conn.local_ip, conn.local_port)
-            } else if conn.local_port > 0 {
-                format!("*:{}", conn.local_port)
-            } else {
-                "*:*".to_string()
-            };
+        let rows: Vec<Row> = conns
+            .iter()
+            .enumerate()
+            .map(|(idx, conn)| {
+                // Format local address with IP
+                let local = if !conn.local_ip.is_empty() && conn.local_port > 0 {
+                    format!("{}:{}", conn.local_ip, conn.local_port)
+                } else if conn.local_port > 0 {
+                    format!("*:{}", conn.local_port)
+                } else {
+                    "*:*".to_string()
+                };
 
-            // Format remote address
-            let remote = if conn.remote_port > 0 {
-                format!("{}:{}", conn.remote_ip, conn.remote_port)
-            } else {
-                "*:*".to_string()
-            };
+                // Format remote address
+                let remote = if conn.remote_port > 0 {
+                    format!("{}:{}", conn.remote_ip, conn.remote_port)
+                } else {
+                    "*:*".to_string()
+                };
 
-            // Format state with color
-            let (state_str, state_color) = match conn.state {
-                ConnectionState::Established => ("ESTABLISHED", Color::Green),
-                ConnectionState::Listen => ("LISTEN", Color::Cyan),
-                ConnectionState::TimeWait => ("TIME_WAIT", if time_wait_count > 100 { Color::Yellow } else { Color::White }),
-                ConnectionState::CloseWait => ("CLOSE_WAIT", Color::Red),
-                ConnectionState::SynSent => ("SYN_SENT", Color::Yellow),
-                ConnectionState::SynRecv => ("SYN_RECV", Color::Yellow),
-                ConnectionState::FinWait1 => ("FIN_WAIT1", Color::DarkGray),
-                ConnectionState::FinWait2 => ("FIN_WAIT2", Color::DarkGray),
-                ConnectionState::Closing => ("CLOSING", Color::DarkGray),
-                ConnectionState::LastAck => ("LAST_ACK", Color::DarkGray),
-                ConnectionState::Close => ("CLOSE", Color::DarkGray),
-                ConnectionState::Unknown => ("UNKNOWN", Color::DarkGray),
-            };
-
-            // Format process/service info
-            // For listening ports, show service name if known
-            let (owner_text, owner_color) = if let Some(service_name) = port_to_service(conn.local_port) {
-                // Check service health
-                let health_status = services.get(service_name)
-                    .and_then(|s| s.health.as_ref())
-                    .map(|h| if h.healthy { "+" } else { "!" })
-                    .unwrap_or("?");
-
-                let process_suffix = conn.process_name.as_ref()
-                    .map(|p| format!(" ({})", p))
-                    .unwrap_or_default();
-
-                (format!("[{}{}]{}", health_status, service_name, process_suffix), Color::Cyan)
-            } else {
-                // Regular process info
-                let process = conn.process_name.as_ref()
-                    .map(|name| {
-                        if let Some(pid) = conn.process_pid {
-                            format!("{} ({})", name, pid)
+                // Format state with color
+                let (state_str, state_color) = match conn.state {
+                    ConnectionState::Established => ("ESTABLISHED", Color::Green),
+                    ConnectionState::Listen => ("LISTEN", Color::Cyan),
+                    ConnectionState::TimeWait => (
+                        "TIME_WAIT",
+                        if time_wait_count > 100 {
+                            Color::Yellow
                         } else {
-                            name.clone()
-                        }
-                    })
-                    .unwrap_or_else(|| "-".to_string());
-                (process, Color::Yellow)
-            };
+                            Color::White
+                        },
+                    ),
+                    ConnectionState::CloseWait => ("CLOSE_WAIT", Color::Red),
+                    ConnectionState::SynSent => ("SYN_SENT", Color::Yellow),
+                    ConnectionState::SynRecv => ("SYN_RECV", Color::Yellow),
+                    ConnectionState::FinWait1 => ("FIN_WAIT1", Color::DarkGray),
+                    ConnectionState::FinWait2 => ("FIN_WAIT2", Color::DarkGray),
+                    ConnectionState::Closing => ("CLOSING", Color::DarkGray),
+                    ConnectionState::LastAck => ("LAST_ACK", Color::DarkGray),
+                    ConnectionState::Close => ("CLOSE", Color::DarkGray),
+                    ConnectionState::Unknown => ("UNKNOWN", Color::DarkGray),
+                };
 
-            // Check if this row is selected in visual mode
-            let is_selected = in_visual && self.is_conn_selected(idx);
+                // Format process/service info
+                // For listening ports, show service name if known
+                let (owner_text, owner_color) =
+                    if let Some(service_name) = port_to_service(conn.local_port) {
+                        // Check service health
+                        let health_status = services
+                            .get(service_name)
+                            .and_then(|s| s.health.as_ref())
+                            .map(|h| if h.healthy { "+" } else { "!" })
+                            .unwrap_or("?");
 
-            // Row style - highlight selection with magenta background
-            let row_style = if is_selected {
-                Style::default().bg(Color::Rgb(60, 20, 60)) // Dark magenta
-            } else {
-                Style::default()
-            };
+                        let process_suffix = conn
+                            .process_name
+                            .as_ref()
+                            .map(|p| format!(" ({})", p))
+                            .unwrap_or_default();
 
-            Row::new([
-                Cell::from(conn.protocol.clone()),
-                Cell::from(local),
-                Cell::from(remote),
-                Cell::from(state_str).style(Style::default().fg(state_color)),
-                Cell::from(owner_text).style(Style::default().fg(owner_color)),
-            ]).style(row_style)
-        }).collect();
+                        (
+                            format!("[{}{}]{}", health_status, service_name, process_suffix),
+                            Color::Cyan,
+                        )
+                    } else {
+                        // Regular process info
+                        let process = conn
+                            .process_name
+                            .as_ref()
+                            .map(|name| {
+                                if let Some(pid) = conn.process_pid {
+                                    format!("{} ({})", name, pid)
+                                } else {
+                                    name.clone()
+                                }
+                            })
+                            .unwrap_or_else(|| "-".to_string());
+                        (process, Color::Yellow)
+                    };
+
+                // Check if this row is selected in visual mode
+                let is_selected = in_visual && self.is_conn_selected(idx);
+
+                // Row style - highlight selection with magenta background
+                let row_style = if is_selected {
+                    Style::default().bg(Color::Rgb(60, 20, 60)) // Dark magenta
+                } else {
+                    Style::default()
+                };
+
+                Row::new([
+                    Cell::from(conn.protocol.clone()),
+                    Cell::from(local),
+                    Cell::from(remote),
+                    Cell::from(state_str).style(Style::default().fg(state_color)),
+                    Cell::from(owner_text).style(Style::default().fg(owner_color)),
+                ])
+                .style(row_style)
+            })
+            .collect();
 
         let widths = [
-            Constraint::Length(6),    // PROTO
-            Constraint::Length(22),   // LOCAL (IP:port)
-            Constraint::Length(24),   // REMOTE
-            Constraint::Length(12),   // STATE
-            Constraint::Min(16),      // PROCESS (takes remaining space)
+            Constraint::Length(6),  // PROTO
+            Constraint::Length(22), // LOCAL (IP:port)
+            Constraint::Length(24), // REMOTE
+            Constraint::Length(12), // STATE
+            Constraint::Min(16),    // PROCESS (takes remaining space)
         ];
 
         let table = Table::new(rows, widths)
@@ -1562,7 +1764,11 @@ impl NetworkStatsComponent {
     /// Draw footer for connection view
     fn draw_conn_footer(&self, frame: &mut Frame, area: Rect) {
         let listen_label = if self.listening_only { "all" } else { "listen" };
-        let all_label = if self.show_all_connections { "iface" } else { "all" };
+        let all_label = if self.show_all_connections {
+            "iface"
+        } else {
+            "all"
+        };
 
         // BPF filter indicator with color coding
         let (bpf_label, bpf_color) = if self.capture.use_bpf_filter {
@@ -1603,8 +1809,7 @@ impl NetworkStatsComponent {
             ]
         };
 
-        let footer = Paragraph::new(Line::from(spans))
-            .style(Style::default().fg(Color::DarkGray));
+        let footer = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(footer, area);
     }
 
@@ -1614,9 +1819,7 @@ impl NetworkStatsComponent {
         let Some(conn) = conns.get(self.conn_selected) else {
             return;
         };
-        let services = self.data()
-            .map(|d| d.services.clone())
-            .unwrap_or_default();
+        let services = self.data().map(|d| d.services.clone()).unwrap_or_default();
 
         // Format local address
         let local_addr = if !conn.local_ip.is_empty() {
@@ -1652,9 +1855,7 @@ impl NetworkStatsComponent {
         };
 
         // Format namespace
-        let netns_info = conn.netns.as_ref()
-            .map(|ns| ns.as_str())
-            .unwrap_or("host");
+        let netns_info = conn.netns.as_ref().map(|ns| ns.as_str()).unwrap_or("host");
 
         let mut lines = vec![
             Line::from(vec![
@@ -1662,16 +1863,31 @@ impl NetworkStatsComponent {
                 Span::raw(&conn.protocol),
                 Span::raw("   "),
                 Span::styled("State: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(state_str, Style::default().fg(state_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    state_str,
+                    Style::default()
+                        .fg(state_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("   "),
                 Span::styled("Process: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(&process_info, Style::default().fg(Color::Yellow)),
             ]),
             Line::from(vec![
-                Span::styled("Local:  ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Local:  ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(&local_addr),
                 Span::raw("   "),
-                Span::styled("Remote: ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Remote: ",
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(&remote_addr),
                 Span::raw("   "),
                 Span::styled("Netns: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -1681,13 +1897,21 @@ impl NetworkStatsComponent {
                 Span::styled("RX Queue: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     conn.rx_queue.to_string(),
-                    if conn.rx_queue > 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) }
+                    if conn.rx_queue > 0 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
                 ),
                 Span::raw(" bytes   "),
                 Span::styled("TX Queue: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     conn.tx_queue.to_string(),
-                    if conn.tx_queue > 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) }
+                    if conn.tx_queue > 0 {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
                 ),
                 Span::raw(" bytes"),
             ]),
@@ -1707,13 +1931,16 @@ impl NetworkStatsComponent {
                 })
                 .unwrap_or(("unknown", Color::DarkGray));
 
-            let state_text = service_info
-                .map(|s| s.state.as_str())
-                .unwrap_or("unknown");
+            let state_text = service_info.map(|s| s.state.as_str()).unwrap_or("unknown");
 
             lines.push(Line::from(vec![
                 Span::styled("Service: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(service_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    service_name,
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" ("),
                 Span::styled(state_text, Style::default().fg(Color::DarkGray)),
                 Span::raw(", "),
@@ -1750,11 +1977,11 @@ impl NetworkStatsComponent {
     /// Draw the connection drill-down view
     fn draw_connections_view(&mut self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::vertical([
-            Constraint::Length(1),  // Header
-            Constraint::Length(1),  // Summary bar
-            Constraint::Min(5),     // Connection table
-            Constraint::Length(5),  // Detail section (4 lines + border)
-            Constraint::Length(1),  // Footer
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Summary bar
+            Constraint::Min(5),    // Connection table
+            Constraint::Length(5), // Detail section (4 lines + border)
+            Constraint::Length(1), // Footer
         ])
         .split(area);
 
@@ -1778,13 +2005,19 @@ impl NetworkStatsComponent {
         let tabs = Line::from(vec![
             Span::raw(" "),
             if self.view_mode == ViewMode::Interfaces {
-                Span::styled(" Interfaces ", Style::default().fg(Color::Black).bg(Color::Cyan))
+                Span::styled(
+                    " Interfaces ",
+                    Style::default().fg(Color::Black).bg(Color::Cyan),
+                )
             } else {
                 Span::styled(" Interfaces ", Style::default().fg(Color::DarkGray))
             },
             Span::raw(" "),
             if self.view_mode == ViewMode::KubeSpan {
-                Span::styled(" KubeSpan ", Style::default().fg(Color::Black).bg(Color::Cyan))
+                Span::styled(
+                    " KubeSpan ",
+                    Style::default().fg(Color::Black).bg(Color::Cyan),
+                )
             } else {
                 Span::styled(" KubeSpan ", Style::default().fg(Color::DarkGray))
             },
@@ -1793,7 +2026,8 @@ impl NetworkStatsComponent {
 
         // Check if KubeSpan is enabled
         let kubespan_enabled = self.data().and_then(|d| d.kubespan_enabled);
-        let kubespan_peers_empty = self.data()
+        let kubespan_peers_empty = self
+            .data()
             .map(|d| d.kubespan_peers.is_empty())
             .unwrap_or(true);
         match kubespan_enabled {
@@ -1838,7 +2072,11 @@ impl NetworkStatsComponent {
         .split(area);
 
         let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
         frame.render_widget(header, content_chunks[0]);
 
         let info_lines = vec![
@@ -1848,30 +2086,34 @@ impl NetworkStatsComponent {
                 Span::styled("Not Enabled", Style::default().fg(Color::Gray)),
             ]),
             Line::from(""),
-            Line::from(vec![
-                Span::raw("  KubeSpan provides encrypted WireGuard tunnels between cluster nodes."),
-            ]),
+            Line::from(vec![Span::raw(
+                "  KubeSpan provides encrypted WireGuard tunnels between cluster nodes.",
+            )]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled("  To enable KubeSpan:", Style::default().fg(Color::Cyan)),
-            ]),
+            Line::from(vec![Span::styled(
+                "  To enable KubeSpan:",
+                Style::default().fg(Color::Cyan),
+            )]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled("    machine:", Style::default().fg(Color::White)),
-            ]),
-            Line::from(vec![
-                Span::styled("      network:", Style::default().fg(Color::White)),
-            ]),
-            Line::from(vec![
-                Span::styled("        kubespan:", Style::default().fg(Color::White)),
-            ]),
-            Line::from(vec![
-                Span::styled("          enabled: true", Style::default().fg(Color::Green)),
-            ]),
+            Line::from(vec![Span::styled(
+                "    machine:",
+                Style::default().fg(Color::White),
+            )]),
+            Line::from(vec![Span::styled(
+                "      network:",
+                Style::default().fg(Color::White),
+            )]),
+            Line::from(vec![Span::styled(
+                "        kubespan:",
+                Style::default().fg(Color::White),
+            )]),
+            Line::from(vec![Span::styled(
+                "          enabled: true",
+                Style::default().fg(Color::Green),
+            )]),
         ];
 
-        let info = Paragraph::new(info_lines)
-            .block(Block::default().borders(Borders::NONE));
+        let info = Paragraph::new(info_lines).block(Block::default().borders(Borders::NONE));
         frame.render_widget(info, content_chunks[1]);
     }
 
@@ -1884,7 +2126,11 @@ impl NetworkStatsComponent {
         .split(area);
 
         let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
         frame.render_widget(header, content_chunks[0]);
 
         let info_lines = vec![
@@ -1896,13 +2142,12 @@ impl NetworkStatsComponent {
                 Span::styled("No peers connected", Style::default().fg(Color::Gray)),
             ]),
             Line::from(""),
-            Line::from(vec![
-                Span::raw("  Waiting for other nodes to establish KubeSpan connections."),
-            ]),
+            Line::from(vec![Span::raw(
+                "  Waiting for other nodes to establish KubeSpan connections.",
+            )]),
         ];
 
-        let info = Paragraph::new(info_lines)
-            .block(Block::default().borders(Borders::NONE));
+        let info = Paragraph::new(info_lines).block(Block::default().borders(Borders::NONE));
         frame.render_widget(info, content_chunks[1]);
     }
 
@@ -1915,32 +2160,37 @@ impl NetworkStatsComponent {
         .split(area);
 
         let header = Paragraph::new(format!(" KubeSpan │ {} ({})", self.hostname, self.address))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
         frame.render_widget(header, content_chunks[0]);
 
         let info_lines = vec![
             Line::from(""),
-            Line::from(vec![
-                Span::styled("  Checking KubeSpan status...", Style::default().fg(Color::Yellow)),
-            ]),
+            Line::from(vec![Span::styled(
+                "  Checking KubeSpan status...",
+                Style::default().fg(Color::Yellow),
+            )]),
         ];
 
-        let info = Paragraph::new(info_lines)
-            .block(Block::default().borders(Borders::NONE));
+        let info = Paragraph::new(info_lines).block(Block::default().borders(Borders::NONE));
         frame.render_widget(info, content_chunks[1]);
     }
 
     /// Draw KubeSpan peers table and detail
     fn draw_kubespan_peers(&mut self, frame: &mut Frame, area: Rect) {
         let content_chunks = Layout::vertical([
-            Constraint::Length(2),  // Header with summary
-            Constraint::Min(8),     // Peer table
-            Constraint::Length(7),  // Detail section
+            Constraint::Length(2), // Header with summary
+            Constraint::Min(8),    // Peer table
+            Constraint::Length(7), // Detail section
         ])
         .split(area);
 
         // Get peer data
-        let kubespan_peers = self.data()
+        let kubespan_peers = self
+            .data()
             .map(|d| d.kubespan_peers.clone())
             .unwrap_or_default();
 
@@ -1952,7 +2202,9 @@ impl NetworkStatsComponent {
         let header = Line::from(vec![
             Span::styled(
                 format!(" KubeSpan │ {} ({}) │ ", self.hostname, self.address),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("{}/{} peers connected", connected, total),
@@ -1992,7 +2244,10 @@ impl NetworkStatsComponent {
                     _ => Style::default().fg(Color::Yellow),
                 };
 
-                let rtt_str = peer.rtt_ms.map(|r| format!("{:.1}ms", r)).unwrap_or_else(|| "--".to_string());
+                let rtt_str = peer
+                    .rtt_ms
+                    .map(|r| format!("{:.1}ms", r))
+                    .unwrap_or_else(|| "--".to_string());
                 let endpoint_str = peer.endpoint.clone().unwrap_or_else(|| "--".to_string());
 
                 Row::new(vec![
@@ -2009,12 +2264,12 @@ impl NetworkStatsComponent {
         let table = Table::new(
             rows,
             [
-                Constraint::Min(20),      // Hostname
-                Constraint::Length(22),   // Endpoint
-                Constraint::Length(10),   // RTT
-                Constraint::Length(10),   // State
-                Constraint::Length(10),   // RX
-                Constraint::Length(10),   // TX
+                Constraint::Min(20),    // Hostname
+                Constraint::Length(22), // Endpoint
+                Constraint::Length(10), // RTT
+                Constraint::Length(10), // State
+                Constraint::Length(10), // RX
+                Constraint::Length(10), // TX
             ],
         )
         .header(header_row)
@@ -2051,13 +2306,11 @@ impl NetworkStatsComponent {
                 ]),
             ];
 
-            let detail = Paragraph::new(detail_lines)
-                .block(Block::default().borders(Borders::TOP));
+            let detail = Paragraph::new(detail_lines).block(Block::default().borders(Borders::TOP));
             frame.render_widget(detail, content_chunks[2]);
         }
     }
 }
-
 
 impl NetworkStatsComponent {
     /// Handle key events in Interfaces view
@@ -2065,7 +2318,8 @@ impl NetworkStatsComponent {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
             KeyCode::Enter => {
-                let has_connections = self.data()
+                let has_connections = self
+                    .data()
                     .map(|d| !d.connections.is_empty())
                     .unwrap_or(false);
                 if has_connections {
@@ -2132,16 +2386,15 @@ impl NetworkStatsComponent {
 
     /// Handle key events in KubeSpan view
     fn handle_kubespan_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        let peer_count = self.data()
-            .map(|d| d.kubespan_peers.len())
-            .unwrap_or(0);
+        let peer_count = self.data().map(|d| d.kubespan_peers.len()).unwrap_or(0);
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Ok(Some(Action::Back)),
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),
             KeyCode::Char('j') | KeyCode::Down => {
                 if peer_count > 0 {
                     self.kubespan_selected = (self.kubespan_selected + 1) % peer_count;
-                    self.kubespan_table_state.select(Some(self.kubespan_selected));
+                    self.kubespan_table_state
+                        .select(Some(self.kubespan_selected));
                 }
                 Ok(None)
             }
@@ -2152,7 +2405,8 @@ impl NetworkStatsComponent {
                     } else {
                         self.kubespan_selected - 1
                     };
-                    self.kubespan_table_state.select(Some(self.kubespan_selected));
+                    self.kubespan_table_state
+                        .select(Some(self.kubespan_selected));
                 }
                 Ok(None)
             }
@@ -2166,7 +2420,8 @@ impl NetworkStatsComponent {
             KeyCode::Char('G') => {
                 if peer_count > 0 {
                     self.kubespan_selected = peer_count - 1;
-                    self.kubespan_table_state.select(Some(self.kubespan_selected));
+                    self.kubespan_table_state
+                        .select(Some(self.kubespan_selected));
                 }
                 Ok(None)
             }
@@ -2296,9 +2551,7 @@ impl NetworkStatsComponent {
             KeyCode::Char('r') => Ok(Some(Action::Refresh)),
 
             // Open service logs (for known service ports)
-            KeyCode::Char('o') => {
-                self.open_service_logs()
-            }
+            KeyCode::Char('o') => self.open_service_logs(),
 
             // Restart service (for known service ports) - requires confirmation
             KeyCode::Char('R') => {
@@ -2397,7 +2650,8 @@ impl NetworkStatsComponent {
         };
 
         // Check if service exists
-        let service_exists = self.data()
+        let service_exists = self
+            .data()
             .map(|d| d.services.contains_key(service_name))
             .unwrap_or(false);
         if !service_exists {
@@ -2420,10 +2674,8 @@ impl NetworkStatsComponent {
         match action {
             PendingAction::RestartService(service_id, service_name) => {
                 // Show status message while waiting
-                self.status_message = Some((
-                    format!("Restarting {}...", service_name),
-                    Instant::now(),
-                ));
+                self.status_message =
+                    Some((format!("Restarting {}...", service_name), Instant::now()));
 
                 // Store that we need to restart - will be executed on next refresh
                 self.pending_restart_service = Some(service_id);
@@ -2437,34 +2689,42 @@ impl NetworkStatsComponent {
     /// Draw the interfaces view (main view)
     fn draw_interfaces_view(&mut self, frame: &mut Frame, area: Rect) {
         // Build constraints dynamically based on what we need to show
-        let (total_errors, total_dropped, conn_counts_has_warnings, connections_empty) = self.data()
-            .map(|d| (d.total_errors, d.total_dropped, d.conn_counts.has_warnings(), d.connections.is_empty()))
+        let (total_errors, total_dropped, conn_counts_has_warnings, connections_empty) = self
+            .data()
+            .map(|d| {
+                (
+                    d.total_errors,
+                    d.total_dropped,
+                    d.conn_counts.has_warnings(),
+                    d.connections.is_empty(),
+                )
+            })
             .unwrap_or((0, 0, false, true));
         let has_warning = total_errors > 0 || total_dropped > 0 || conn_counts_has_warnings;
         let has_connections = !connections_empty;
         let is_capturing = self.is_capturing();
 
         let mut constraints = vec![
-            Constraint::Length(1),  // Header
-            Constraint::Length(1),  // Traffic summary bar
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Traffic summary bar
         ];
 
         if is_capturing {
-            constraints.push(Constraint::Length(1));  // Capture status bar
+            constraints.push(Constraint::Length(1)); // Capture status bar
         }
 
         if has_connections {
-            constraints.push(Constraint::Length(1));  // Connection summary bar
-            constraints.push(Constraint::Length(1));  // Service health indicators
+            constraints.push(Constraint::Length(1)); // Connection summary bar
+            constraints.push(Constraint::Length(1)); // Service health indicators
         }
 
         if has_warning {
-            constraints.push(Constraint::Length(1));  // Warning
+            constraints.push(Constraint::Length(1)); // Warning
         }
 
-        constraints.push(Constraint::Min(5));     // Device table (takes remaining space)
-        constraints.push(Constraint::Length(4));  // Detail section
-        constraints.push(Constraint::Length(1));  // Footer
+        constraints.push(Constraint::Min(5)); // Device table (takes remaining space)
+        constraints.push(Constraint::Length(4)); // Detail section
+        constraints.push(Constraint::Length(1)); // Footer
 
         let chunks = Layout::vertical(constraints).split(area);
 
@@ -2574,8 +2834,8 @@ impl Component for NetworkStatsComponent {
         }
 
         if let Some(err) = self.state.error() {
-            let error = Paragraph::new(format!("Error: {}", err))
-                .style(Style::default().fg(Color::Red));
+            let error =
+                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
             frame.render_widget(error, area);
             return Ok(());
         }
@@ -2705,7 +2965,8 @@ impl NetworkStatsComponent {
 
     /// Check if file viewer needs content fetched
     pub fn file_viewer_needs_fetch(&self) -> bool {
-        self.file_viewer.as_ref()
+        self.file_viewer
+            .as_ref()
             .map(|v| v.lines.len() == 1 && v.lines[0] == "Loading...")
             .unwrap_or(false)
     }
@@ -2713,10 +2974,9 @@ impl NetworkStatsComponent {
     /// Draw the confirmation dialog
     fn draw_confirmation_dialog(&self, frame: &mut Frame, area: Rect, action: &PendingAction) {
         let (title, message) = match action {
-            PendingAction::RestartService(_, name) => (
-                "Confirm Restart",
-                format!("Restart service '{}'?", name),
-            ),
+            PendingAction::RestartService(_, name) => {
+                ("Confirm Restart", format!("Restart service '{}'?", name))
+            }
         };
 
         // Center the dialog
@@ -2733,7 +2993,9 @@ impl NetworkStatsComponent {
         let block = Block::default()
             .title(Span::styled(
                 format!(" {} ", title),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow))
@@ -2820,7 +3082,11 @@ impl NetworkStatsComponent {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
             .title(title)
-            .title_style(Style::default().fg(border_color).add_modifier(Modifier::BOLD));
+            .title_style(
+                Style::default()
+                    .fg(border_color)
+                    .add_modifier(Modifier::BOLD),
+            );
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -3103,10 +3369,18 @@ impl NetworkStatsComponent {
     /// Decode route flags
     fn decode_route_flags(flags: u32) -> String {
         let mut s = String::new();
-        if flags & 0x0001 != 0 { s.push('U'); } // RTF_UP
-        if flags & 0x0002 != 0 { s.push('G'); } // RTF_GATEWAY
-        if flags & 0x0004 != 0 { s.push('H'); } // RTF_HOST
-        if s.is_empty() { s.push('-'); }
+        if flags & 0x0001 != 0 {
+            s.push('U');
+        } // RTF_UP
+        if flags & 0x0002 != 0 {
+            s.push('G');
+        } // RTF_GATEWAY
+        if flags & 0x0004 != 0 {
+            s.push('H');
+        } // RTF_HOST
+        if s.is_empty() {
+            s.push('-');
+        }
         s
     }
 
@@ -3130,7 +3404,9 @@ impl NetworkStatsComponent {
         let block = Block::default()
             .title(Span::styled(
                 format!(" {} ", viewer.title),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
@@ -3154,7 +3430,9 @@ impl NetworkStatsComponent {
                 } else if l.starts_with("  •") {
                     Style::default().fg(Color::Green)
                 } else if l.contains(':') && !l.contains('.') {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
@@ -3163,7 +3441,15 @@ impl NetworkStatsComponent {
             .collect();
 
         let content = Paragraph::new(visible_lines);
-        frame.render_widget(content, Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(2)));
+        frame.render_widget(
+            content,
+            Rect::new(
+                inner.x,
+                inner.y,
+                inner.width,
+                inner.height.saturating_sub(2),
+            ),
+        );
 
         // Draw footer
         let footer_area = Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1);
@@ -3199,10 +3485,7 @@ impl NetworkStatsComponent {
             CaptureState::Idle => {
                 // Get selected interface name
                 if let Some(dev_name) = self.selected_device_name() {
-                    self.capture.state = CaptureState::Capturing(
-                        dev_name,
-                        Instant::now(),
-                    );
+                    self.capture.state = CaptureState::Capturing(dev_name, Instant::now());
                     self.capture.data.clear();
                     // Actual capture start happens in start_capture_async
                 }
@@ -3215,7 +3498,10 @@ impl NetworkStatsComponent {
 
                 let bytes_str = NetDevStats::format_bytes(bytes as u64);
                 self.status_message = Some((
-                    format!("Capture stopped: {} - press 's' to save, open in Wireshark", bytes_str),
+                    format!(
+                        "Capture stopped: {} - press 's' to save, open in Wireshark",
+                        bytes_str
+                    ),
                     Instant::now(),
                 ));
             }
@@ -3230,10 +3516,8 @@ impl NetworkStatsComponent {
             }
 
             let Some(client) = &self.client else {
-                self.status_message = Some((
-                    "Error: No client configured".to_string(),
-                    Instant::now(),
-                ));
+                self.status_message =
+                    Some(("Error: No client configured".to_string(), Instant::now()));
                 self.capture.state = CaptureState::Idle;
                 return;
             };
@@ -3242,7 +3526,9 @@ impl NetworkStatsComponent {
             // Optionally use BPF filter to exclude port 50000 (Talos API)
             // to prevent feedback loop when capturing on management interface
             let capture_result = if self.capture.use_bpf_filter {
-                client.packet_capture_exclude_api(interface, false, 65535).await
+                client
+                    .packet_capture_exclude_api(interface, false, 65535)
+                    .await
             } else {
                 client.packet_capture(interface, false, 65535).await
             };
@@ -3256,15 +3542,15 @@ impl NetworkStatsComponent {
                         " [NO filter]"
                     };
                     self.status_message = Some((
-                        format!("Capturing on {}{} (save with 's')", interface, filter_status),
+                        format!(
+                            "Capturing on {}{} (save with 's')",
+                            interface, filter_status
+                        ),
                         Instant::now(),
                     ));
                 }
                 Err(e) => {
-                    self.status_message = Some((
-                        format!("Capture failed: {}", e),
-                        Instant::now(),
-                    ));
+                    self.status_message = Some((format!("Capture failed: {}", e), Instant::now()));
                     self.capture.state = CaptureState::Idle;
                 }
             }
@@ -3318,10 +3604,7 @@ impl NetworkStatsComponent {
         }
 
         if self.capture.data.is_empty() {
-            self.status_message = Some((
-                "No capture data to save".to_string(),
-                Instant::now(),
-            ));
+            self.status_message = Some(("No capture data to save".to_string(), Instant::now()));
             return;
         }
 
@@ -3351,10 +3634,7 @@ impl NetworkStatsComponent {
                 self.capture.data.clear();
             }
             Err(e) => {
-                self.status_message = Some((
-                    format!("Save failed: {}", e),
-                    Instant::now(),
-                ));
+                self.status_message = Some((format!("Save failed: {}", e), Instant::now()));
             }
         }
     }
@@ -3389,11 +3669,20 @@ impl NetworkStatsComponent {
             let bytes_str = NetDevStats::format_bytes(bytes);
 
             let status = Line::from(vec![
-                Span::styled(" ● ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                Span::styled("REC ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " ● ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "REC ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(iface, Style::default().fg(Color::Cyan)),
                 Span::raw("  "),
-                Span::styled(format!("{:02}:{:02}", mins, secs), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{:02}:{:02}", mins, secs),
+                    Style::default().fg(Color::Yellow),
+                ),
                 Span::raw("  "),
                 Span::styled(&bytes_str, Style::default().fg(Color::Blue)),
                 Span::raw("  "),
@@ -3403,8 +3692,7 @@ impl NetworkStatsComponent {
                 Span::styled(" save to /tmp", Style::default().fg(Color::DarkGray)),
             ]);
 
-            let bar = Paragraph::new(status)
-                .style(Style::default().bg(Color::Black));
+            let bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
             frame.render_widget(bar, area);
         }
     }

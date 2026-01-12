@@ -42,23 +42,25 @@ pub const KNOWN_PORTS: &[ServicePort] = &[
     ServicePort::new(50000, "apid", "Talos API daemon", true, false),
     ServicePort::new(50001, "trustd", "Talos trust daemon", true, false),
     ServicePort::new(51821, "kubernetesd", "Kubernetes daemon", true, true),
-
     // etcd
     ServicePort::new(2379, "etcd-client", "etcd client API", false, true),
     ServicePort::new(2380, "etcd-peer", "etcd peer communication", false, true),
-
     // Kubernetes control plane
     ServicePort::new(6443, "kube-apiserver", "Kubernetes API server", false, true),
     ServicePort::new(10250, "kubelet", "Kubelet API", false, false),
     ServicePort::new(10259, "kube-scheduler", "Kubernetes scheduler", false, true),
-    ServicePort::new(10257, "kube-controller-manager", "Controller manager", false, true),
-
+    ServicePort::new(
+        10257,
+        "kube-controller-manager",
+        "Controller manager",
+        false,
+        true,
+    ),
     // Kubernetes networking
     ServicePort::new(10256, "kube-proxy", "Kubernetes proxy", false, false),
     ServicePort::new(8472, "flannel-vxlan", "Flannel VXLAN overlay", false, false),
     ServicePort::new(4240, "cilium-health", "Cilium health check", false, false),
     ServicePort::new(4244, "cilium-hubble", "Cilium Hubble relay", false, false),
-
     // Common services
     ServicePort::new(53, "dns", "DNS", false, false),
     ServicePort::new(443, "https", "HTTPS", false, false),
@@ -79,7 +81,8 @@ pub const KNOWN_PORTS: &[ServicePort] = &[
 /// assert_eq!(port_to_service(12345), None);
 /// ```
 pub fn port_to_service(port: u16) -> Option<&'static str> {
-    KNOWN_PORTS.iter()
+    KNOWN_PORTS
+        .iter()
         .find(|sp| sp.port == port)
         .map(|sp| sp.name)
 }

@@ -23,7 +23,8 @@ pub async fn run_flannel_checks(
 
     // Check br_netfilter kernel module (Flannel requires this)
     let br_netfilter_check = check_br_netfilter(client, ctx).await;
-    let br_netfilter_ok = br_netfilter_check.status == crate::components::diagnostics::types::CheckStatus::Pass;
+    let br_netfilter_ok =
+        br_netfilter_check.status == crate::components::diagnostics::types::CheckStatus::Pass;
 
     checks.push(br_netfilter_check);
 
@@ -40,13 +41,12 @@ pub async fn run_flannel_checks(
 }
 
 /// Check Flannel pod health from K8s API
-fn check_flannel_pods(cni_info: &crate::components::diagnostics::types::CniInfo) -> DiagnosticCheck {
+fn check_flannel_pods(
+    cni_info: &crate::components::diagnostics::types::CniInfo,
+) -> DiagnosticCheck {
     if cni_info.pods.is_empty() {
-        return DiagnosticCheck::warn(
-            "flannel_pods",
-            "Flannel Pods",
-            "No pods found",
-        ).with_details("Could not find Flannel pods in kube-system namespace.");
+        return DiagnosticCheck::warn("flannel_pods", "Flannel Pods", "No pods found")
+            .with_details("Could not find Flannel pods in kube-system namespace.");
     }
 
     let healthy = cni_info.are_pods_healthy();
@@ -56,30 +56,26 @@ fn check_flannel_pods(cni_info: &crate::components::diagnostics::types::CniInfo)
         DiagnosticCheck::pass("flannel_pods", "Flannel Pods", &summary)
     } else {
         // Find unhealthy pods
-        let unhealthy: Vec<_> = cni_info.pods.iter()
+        let unhealthy: Vec<_> = cni_info
+            .pods
+            .iter()
             .filter(|p| p.phase != "Running" || !p.ready)
             .collect();
 
-        let details = unhealthy.iter()
+        let details = unhealthy
+            .iter()
             .map(|p| format!("  {} - {} (ready: {})", p.name, p.phase, p.ready))
             .collect::<Vec<_>>()
             .join("\n");
 
-        DiagnosticCheck::fail(
-            "flannel_pods",
-            "Flannel Pods",
-            &summary,
-            None,
-        ).with_details(&format!("Unhealthy pods:\n{}", details))
+        DiagnosticCheck::fail("flannel_pods", "Flannel Pods", &summary, None)
+            .with_details(&format!("Unhealthy pods:\n{}", details))
     }
 }
 
 /// Check if br_netfilter kernel module is loaded
 /// This is required for Flannel's iptables-based networking
-async fn check_br_netfilter(
-    client: &TalosClient,
-    ctx: &DiagnosticContext,
-) -> DiagnosticCheck {
+async fn check_br_netfilter(client: &TalosClient, ctx: &DiagnosticContext) -> DiagnosticCheck {
     // Check by reading /proc/sys/net/bridge/bridge-nf-call-iptables
     // If it exists and contains "1", br_netfilter is loaded
     let br_netfilter_loaded = match client.is_br_netfilter_loaded().await {
@@ -129,7 +125,11 @@ async fn check_br_netfilter(
         DiagnosticCheck::fail(
             "br_netfilter",
             "br_netfilter",
-            if ctx.is_container { "Missing (load on host)" } else { "Missing" },
+            if ctx.is_container {
+                "Missing (load on host)"
+            } else {
+                "Missing"
+            },
             Some(fix),
         )
         .with_details(details)
@@ -204,8 +204,12 @@ async fn check_flannel_cni(
                 Some(DiagnosticFix {
                     description: "Check Flannel pod status".to_string(),
                     action: FixAction::HostCommand {
-                        command: format!("kubectl get pods -n kube-flannel && docker restart {}", container_name),
-                        description: "Check Flannel pods and restart container if needed".to_string(),
+                        command: format!(
+                            "kubectl get pods -n kube-flannel && docker restart {}",
+                            container_name
+                        ),
+                        description: "Check Flannel pods and restart container if needed"
+                            .to_string(),
                     },
                 }),
                 "Flannel not initialized",

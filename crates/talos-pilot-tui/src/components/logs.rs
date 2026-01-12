@@ -4,14 +4,14 @@ use crate::action::Action;
 use crate::components::Component;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
-use std::collections::HashSet;
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame,
 };
+use std::collections::HashSet;
 
 /// Parsed log entry with visual components
 #[derive(Debug, Clone)]
@@ -373,11 +373,7 @@ impl LogsComponent {
     }
 
     /// Render message with search highlighting (returns owned spans)
-    fn render_message_with_highlight(
-        &self,
-        message: &str,
-        is_current: bool,
-    ) -> Vec<Span<'static>> {
+    fn render_message_with_highlight(&self, message: &str, is_current: bool) -> Vec<Span<'static>> {
         if self.search_query.is_empty() {
             return vec![Span::raw(message.to_string())];
         }
@@ -558,12 +554,11 @@ impl Component for LogsComponent {
             ));
         }
 
-        let header = Paragraph::new(Line::from(header_spans))
-            .block(
-                Block::default()
-                    .borders(Borders::BOTTOM)
-                    .border_style(Style::default().fg(Color::DarkGray)),
-            );
+        let header = Paragraph::new(Line::from(header_spans)).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
         frame.render_widget(header, layout[0]);
 
         // Content area
@@ -637,7 +632,9 @@ impl Component for LogsComponent {
                 if entry.message.len() <= available_width {
                     // Fits on one line
                     if is_match && !self.search_query.is_empty() {
-                        spans.extend(self.render_message_with_highlight(&entry.message, is_current_match));
+                        spans.extend(
+                            self.render_message_with_highlight(&entry.message, is_current_match),
+                        );
                     } else {
                         spans.push(Span::raw(entry.message.clone()));
                     }
@@ -646,7 +643,9 @@ impl Component for LogsComponent {
                     // Needs wrapping - first line
                     let first_part: String = entry.message.chars().take(available_width).collect();
                     if is_match && !self.search_query.is_empty() {
-                        spans.extend(self.render_message_with_highlight(&first_part, is_current_match));
+                        spans.extend(
+                            self.render_message_with_highlight(&first_part, is_current_match),
+                        );
                     } else {
                         spans.push(Span::raw(first_part));
                     }
@@ -660,7 +659,9 @@ impl Component for LogsComponent {
                         if let Ok(chunk_str) = std::str::from_utf8(chunk) {
                             let mut cont_spans = vec![Span::raw(indent)];
                             if is_match && !self.search_query.is_empty() {
-                                cont_spans.extend(self.render_message_with_highlight(chunk_str, is_current_match));
+                                cont_spans.extend(
+                                    self.render_message_with_highlight(chunk_str, is_current_match),
+                                );
                             } else {
                                 cont_spans.push(Span::styled(
                                     chunk_str.to_string(),
@@ -693,7 +694,11 @@ impl Component for LogsComponent {
         // Search bar (if active)
         if has_search_bar {
             let search_area = layout[2];
-            let cursor_char = if self.search_mode == SearchMode::Input { "█" } else { "" };
+            let cursor_char = if self.search_mode == SearchMode::Input {
+                "█"
+            } else {
+                ""
+            };
             let search_line = Line::from(vec![
                 Span::styled(" /", Style::default().fg(Color::Yellow)),
                 Span::raw(&self.search_query),

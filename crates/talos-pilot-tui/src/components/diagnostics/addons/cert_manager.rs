@@ -8,8 +8,8 @@
 use crate::components::diagnostics::types::DiagnosticCheck;
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
-    api::{Api, ListParams},
     Client,
+    api::{Api, ListParams},
 };
 
 /// Run cert-manager diagnostic checks
@@ -116,8 +116,8 @@ async fn check_webhook(client: &Client) -> DiagnosticCheck {
                     "cert_manager_webhook",
                     "cert-manager Webhook",
                     "Not found",
-                    )
-                    .with_details("Webhook pod not found. Certificate validation may not work.");
+                )
+                .with_details("Webhook pod not found. Certificate validation may not work.");
             }
 
             // Check if webhook is ready

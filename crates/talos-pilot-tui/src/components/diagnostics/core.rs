@@ -35,8 +35,7 @@ pub async fn run_system_checks(
         }
         Err(e) => {
             checks.push(
-                DiagnosticCheck::unknown("memory", "Memory")
-                    .with_details(&format!("Error: {}", e)),
+                DiagnosticCheck::unknown("memory", "Memory").with_details(&format!("Error: {}", e)),
             );
         }
     }
@@ -49,8 +48,12 @@ pub async fn run_system_checks(
                 // Scale threshold by CPU count: warn if load > cpu_count * 1.5
                 let threshold = (ctx.cpu_count as f64) * 1.5;
                 if load.load1 > threshold {
-                    checks.push(DiagnosticCheck::warn("cpu_load", "CPU Load", &msg)
-                        .with_details(&format!("Load exceeds threshold ({:.1} for {} CPUs)", threshold, ctx.cpu_count)));
+                    checks.push(
+                        DiagnosticCheck::warn("cpu_load", "CPU Load", &msg).with_details(&format!(
+                            "Load exceeds threshold ({:.1} for {} CPUs)",
+                            threshold, ctx.cpu_count
+                        )),
+                    );
                 } else {
                     checks.push(DiagnosticCheck::pass("cpu_load", "CPU Load", &msg));
                 }
@@ -81,11 +84,7 @@ pub async fn run_service_checks(
         Ok(services_list) => {
             for node_services in services_list {
                 for service in node_services.services {
-                    let is_healthy = service
-                        .health
-                        .as_ref()
-                        .map(|h| h.healthy)
-                        .unwrap_or(false);
+                    let is_healthy = service.health.as_ref().map(|h| h.healthy).unwrap_or(false);
 
                     let status_msg = format!(
                         "{} ({})",
@@ -209,12 +208,10 @@ pub async fn run_kubernetes_checks(
              Possible causes:\n\
              - Cluster is still starting up\n\
              - API server not ready yet\n\
-             - Try refreshing in a few seconds".to_string()
+             - Try refreshing in a few seconds"
+                .to_string()
         };
-        checks.push(
-            DiagnosticCheck::unknown("pod_health", "Pod Health")
-                .with_details(&details),
-        );
+        checks.push(DiagnosticCheck::unknown("pod_health", "Pod Health").with_details(&details));
     }
 
     checks
@@ -233,12 +230,20 @@ pub async fn check_cni_health(client: &TalosClient) -> (bool, Option<String>) {
     }
 
     // Check for Cilium CNI config
-    if client.read_file("/etc/cni/net.d/05-cilium.conflist").await.is_ok() {
+    if client
+        .read_file("/etc/cni/net.d/05-cilium.conflist")
+        .await
+        .is_ok()
+    {
         return (true, None);
     }
 
     // Check for Calico CNI config
-    if client.read_file("/etc/cni/net.d/10-calico.conflist").await.is_ok() {
+    if client
+        .read_file("/etc/cni/net.d/10-calico.conflist")
+        .await
+        .is_ok()
+    {
         return (true, None);
     }
 
@@ -276,23 +281,21 @@ pub async fn run_certificate_checks(
             if let Some(context) = config.current_context() {
                 // Check client certificate
                 match context.client_cert_pem() {
-                    Ok(pem_data) => {
-                        match pki::parse_certificate("talosconfig", &pem_data) {
-                            Ok(cert_info) => {
-                                checks.push(cert_to_diagnostic_check(
-                                    "talosconfig_cert",
-                                    "talosconfig",
-                                    &cert_info,
-                                ));
-                            }
-                            Err(e) => {
-                                checks.push(
-                                    DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
-                                        .with_details(&format!("Failed to parse certificate: {}", e)),
-                                );
-                            }
+                    Ok(pem_data) => match pki::parse_certificate("talosconfig", &pem_data) {
+                        Ok(cert_info) => {
+                            checks.push(cert_to_diagnostic_check(
+                                "talosconfig_cert",
+                                "talosconfig",
+                                &cert_info,
+                            ));
                         }
-                    }
+                        Err(e) => {
+                            checks.push(
+                                DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
+                                    .with_details(&format!("Failed to parse certificate: {}", e)),
+                            );
+                        }
+                    },
                     Err(e) => {
                         checks.push(
                             DiagnosticCheck::unknown("talosconfig_cert", "talosconfig")
@@ -303,23 +306,18 @@ pub async fn run_certificate_checks(
 
                 // Check CA certificate
                 match context.ca_pem() {
-                    Ok(pem_data) => {
-                        match pki::parse_certificate("Talos CA", &pem_data) {
-                            Ok(cert_info) => {
-                                checks.push(cert_to_diagnostic_check(
-                                    "talos_ca",
-                                    "Talos CA",
-                                    &cert_info,
-                                ));
-                            }
-                            Err(e) => {
-                                checks.push(
-                                    DiagnosticCheck::unknown("talos_ca", "Talos CA")
-                                        .with_details(&format!("Failed to parse CA: {}", e)),
-                                );
-                            }
+                    Ok(pem_data) => match pki::parse_certificate("Talos CA", &pem_data) {
+                        Ok(cert_info) => {
+                            checks
+                                .push(cert_to_diagnostic_check("talos_ca", "Talos CA", &cert_info));
                         }
-                    }
+                        Err(e) => {
+                            checks.push(
+                                DiagnosticCheck::unknown("talos_ca", "Talos CA")
+                                    .with_details(&format!("Failed to parse CA: {}", e)),
+                            );
+                        }
+                    },
                     Err(e) => {
                         checks.push(
                             DiagnosticCheck::unknown("talos_ca", "Talos CA")
@@ -360,8 +358,14 @@ pub async fn run_certificate_checks(
                                     }
                                     Err(e) => {
                                         checks.push(
-                                            DiagnosticCheck::unknown("kubeconfig_cert", "kubeconfig")
-                                                .with_details(&format!("Failed to parse kubeconfig cert: {}", e)),
+                                            DiagnosticCheck::unknown(
+                                                "kubeconfig_cert",
+                                                "kubeconfig",
+                                            )
+                                            .with_details(&format!(
+                                                "Failed to parse kubeconfig cert: {}",
+                                                e
+                                            )),
                                         );
                                     }
                                 }
@@ -387,7 +391,10 @@ pub async fn run_certificate_checks(
 /// Convert a CertificateInfo to a DiagnosticCheck
 fn cert_to_diagnostic_check(id: &str, name: &str, cert: &CertificateInfo) -> DiagnosticCheck {
     let message = if cert.days_remaining <= 0 {
-        format!("EXPIRED {} ago", cert.time_remaining.replace("expired ", ""))
+        format!(
+            "EXPIRED {} ago",
+            cert.time_remaining.replace("expired ", "")
+        )
     } else {
         format!("expires in {}", cert.time_remaining)
     };
@@ -401,8 +408,12 @@ fn cert_to_diagnostic_check(id: &str, name: &str, cert: &CertificateInfo) -> Dia
     );
 
     let renewal_hint = match name {
-        "talosconfig" => Some("To renew, run:\n  talosctl config new --roles=os:admin new-admin.yaml"),
-        "kubeconfig" => Some("Kubeconfig certificates are managed by Talos.\nRegenerate with: talosctl kubeconfig"),
+        "talosconfig" => {
+            Some("To renew, run:\n  talosctl config new --roles=os:admin new-admin.yaml")
+        }
+        "kubeconfig" => Some(
+            "Kubeconfig certificates are managed by Talos.\nRegenerate with: talosctl kubeconfig",
+        ),
         _ => None,
     };
 
@@ -413,13 +424,9 @@ fn cert_to_diagnostic_check(id: &str, name: &str, cert: &CertificateInfo) -> Dia
     };
 
     match cert.status {
-        CertStatus::Valid => {
-            DiagnosticCheck::pass(id, name, &message)
-                .with_details(&full_details)
-        }
+        CertStatus::Valid => DiagnosticCheck::pass(id, name, &message).with_details(&full_details),
         CertStatus::Warning => {
-            let mut check = DiagnosticCheck::warn(id, name, &message)
-                .with_details(&full_details);
+            let mut check = DiagnosticCheck::warn(id, name, &message).with_details(&full_details);
 
             // Add fix suggestion for talosconfig
             if name == "talosconfig" {
@@ -434,8 +441,8 @@ fn cert_to_diagnostic_check(id: &str, name: &str, cert: &CertificateInfo) -> Dia
             check
         }
         CertStatus::Critical | CertStatus::Expired => {
-            let mut check = DiagnosticCheck::fail(id, name, &message, None)
-                .with_details(&full_details);
+            let mut check =
+                DiagnosticCheck::fail(id, name, &message, None).with_details(&full_details);
 
             // Add fix suggestion for talosconfig
             if name == "talosconfig" {

@@ -7,7 +7,7 @@ use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, Stdout};
 
 /// Terminal wrapper type
@@ -26,11 +26,7 @@ pub fn init() -> Result<Tui> {
 /// Restore the terminal to its original state
 pub fn restore() -> Result<()> {
     terminal::disable_raw_mode()?;
-    crossterm::execute!(
-        io::stdout(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    crossterm::execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
     Ok(())
 }
 

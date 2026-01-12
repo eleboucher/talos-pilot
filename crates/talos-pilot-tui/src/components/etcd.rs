@@ -8,14 +8,16 @@ use crate::ui_ext::QuorumStateExt;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
-    Frame,
 };
 use std::time::Duration;
-use talos_pilot_core::{format_bytes_signed, format_talos_error, AsyncState, QuorumState, SelectableList};
+use talos_pilot_core::{
+    AsyncState, QuorumState, SelectableList, format_bytes_signed, format_talos_error,
+};
 use talos_rs::{EtcdAlarm, EtcdMemberInfo, EtcdMemberStatus, TalosClient};
 
 /// Combined etcd member data (from member list + status)
@@ -105,16 +107,14 @@ impl EtcdComponent {
 
         // Fetch member list, status, and alarms in parallel with timeout
         let timeout = Duration::from_secs(10);
-        let fetch_result = tokio::time::timeout(
-            timeout,
-            async {
-                tokio::join!(
-                    client.etcd_members(),
-                    client.etcd_status(),
-                    client.etcd_alarms()
-                )
-            }
-        ).await;
+        let fetch_result = tokio::time::timeout(timeout, async {
+            tokio::join!(
+                client.etcd_members(),
+                client.etcd_status(),
+                client.etcd_alarms()
+            )
+        })
+        .await;
 
         let (members_result, status_result, alarms_result) = match fetch_result {
             Ok(results) => results,
@@ -132,7 +132,8 @@ impl EtcdComponent {
             Ok(members) => members,
             Err(e) => {
                 let msg = format_talos_error(&e);
-                self.state.set_error_with_retry(format!("Failed to fetch members: {}", msg));
+                self.state
+                    .set_error_with_retry(format!("Failed to fetch members: {}", msg));
                 return Ok(());
             }
         };
@@ -184,7 +185,12 @@ impl EtcdComponent {
 
         // Calculate quorum state
         let total = data.members.len();
-        let healthy = data.members.items().iter().filter(|m| m.status.is_some()).count();
+        let healthy = data
+            .members
+            .items()
+            .iter()
+            .filter(|m| m.status.is_some())
+            .count();
         data.quorum_state = QuorumState::from_counts(healthy, total);
 
         // Calculate totals
@@ -253,14 +259,23 @@ impl EtcdComponent {
 
         let line = Line::from(vec![
             Span::styled(format!("{} ", indicator), Style::default().fg(color)),
-            Span::styled(state_text, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                state_text,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
             Span::raw(format!("  {} members    ", member_count)),
-            Span::raw(format!("Quorum: {} ", if matches!(data.quorum_state, QuorumState::NoQuorum { .. }) { "No" } else { "Yes" })),
+            Span::raw(format!(
+                "Quorum: {} ",
+                if matches!(data.quorum_state, QuorumState::NoQuorum { .. }) {
+                    "No"
+                } else {
+                    "Yes"
+                }
+            )),
             Span::raw(format!("   DB: {}    Rev: {}", db_size, data.revision)),
         ]);
 
-        let para = Paragraph::new(line)
-            .block(Block::default().borders(Borders::BOTTOM));
+        let para = Paragraph::new(line).block(Block::default().borders(Borders::BOTTOM));
         frame.render_widget(para, area);
     }
 
@@ -339,17 +354,21 @@ impl EtcdComponent {
 
         // Use proportional column widths to fill available space
         let widths = [
-            Constraint::Min(12),         // MEMBER
-            Constraint::Length(10),      // STATUS
-            Constraint::Percentage(30),  // ENDPOINT (flexible)
-            Constraint::Length(10),      // DB SIZE
-            Constraint::Length(12),      // RAFT IDX
-            Constraint::Length(8),       // ERRORS
+            Constraint::Min(12),        // MEMBER
+            Constraint::Length(10),     // STATUS
+            Constraint::Percentage(30), // ENDPOINT (flexible)
+            Constraint::Length(10),     // DB SIZE
+            Constraint::Length(12),     // RAFT IDX
+            Constraint::Length(8),      // ERRORS
         ];
 
         let table = Table::new(rows, widths)
             .header(header)
-            .row_highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+            .row_highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
             .highlight_symbol("> ");
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
@@ -393,25 +412,49 @@ impl EtcdComponent {
                     Span::styled("  ID: ", Style::default().add_modifier(Modifier::DIM)),
                     Span::raw(format!("{:x}", status.member_id)),
                     Span::raw("                        "),
-                    Span::styled("Raft Term:    ", Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(
+                        "Raft Term:    ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
                     Span::raw(status.raft_term.to_string()),
                 ]),
                 Line::from(vec![
-                    Span::styled("  Peer URL:   ", Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(
+                        "  Peer URL:   ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
                     Span::raw(format!("{:<30}", peer_url)),
-                    Span::styled("Raft Applied: ", Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(
+                        "Raft Applied: ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
                     Span::raw(status.raft_applied_index.to_string()),
                 ]),
                 Line::from(vec![
-                    Span::styled("  Client URL: ", Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(
+                        "  Client URL: ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
                     Span::raw(format!("{:<30}", client_url)),
-                    Span::styled("DB In Use:    ", Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(
+                        "DB In Use:    ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
                     Span::raw(format!("{} ({}%)", db_in_use, db_percent)),
                 ]),
                 Line::from(vec![
-                    Span::styled("  Is Learner: ", Style::default().add_modifier(Modifier::DIM)),
-                    Span::raw(format!("{:<30}", if member.info.is_learner { "Yes" } else { "No" })),
-                    Span::styled("Errors:       ", Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(
+                        "  Is Learner: ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
+                    Span::raw(format!(
+                        "{:<30}",
+                        if member.info.is_learner { "Yes" } else { "No" }
+                    )),
+                    Span::styled(
+                        "Errors:       ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
                     Span::raw(errors),
                 ]),
             ]
@@ -422,23 +465,30 @@ impl EtcdComponent {
                     Span::raw(format!("{:x}", member.info.id)),
                 ]),
                 Line::from(vec![
-                    Span::styled("  Peer URL:   ", Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(
+                        "  Peer URL:   ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
                     Span::raw(member.info.peer_urls.first().cloned().unwrap_or_default()),
                 ]),
                 Line::from(vec![
-                    Span::styled("  Client URL: ", Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(
+                        "  Client URL: ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ),
                     Span::raw(member.info.client_urls.first().cloned().unwrap_or_default()),
                 ]),
                 Line::from(vec![
                     Span::styled("  Error: ", Style::default().add_modifier(Modifier::DIM)),
-                    Span::styled("Connection failed - node may be down", Style::default().fg(Color::Red)),
+                    Span::styled(
+                        "Connection failed - node may be down",
+                        Style::default().fg(Color::Red),
+                    ),
                 ]),
             ]
         };
 
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::TOP);
+        let block = Block::default().title(title).borders(Borders::TOP);
         let para = Paragraph::new(content).block(block);
         frame.render_widget(para, area);
     }
@@ -471,8 +521,8 @@ impl EtcdComponent {
             Line::from(alarm_text)
         };
 
-        let para = Paragraph::new(content)
-            .block(Block::default().borders(Borders::TOP | Borders::BOTTOM));
+        let para =
+            Paragraph::new(content).block(Block::default().borders(Borders::TOP | Borders::BOTTOM));
         frame.render_widget(para, area);
     }
 
@@ -534,7 +584,10 @@ impl Component for EtcdComponent {
                 }
                 // Use first member's hostname as the "node" but show all etcd services
                 // In practice, with the current API this shows etcd logs from all connected nodes
-                let node = data.members.items().first()
+                let node = data
+                    .members
+                    .items()
+                    .first()
                     .map(|m| m.info.hostname.clone())
                     .unwrap_or_else(|| "controlplane".to_string());
                 let etcd_vec = vec!["etcd".to_string()];
@@ -579,8 +632,7 @@ impl Component for EtcdComponent {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         // Show loading state (only if no data yet)
         if self.state.is_loading() && !self.state.has_data() {
-            let loading = Paragraph::new("Loading...")
-                .style(Style::default().fg(Color::DarkGray));
+            let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, area);
             return Ok(());
         }
@@ -604,7 +656,11 @@ impl Component for EtcdComponent {
         let member_count = data.members.len().max(1);
         let table_height = (member_count + 2) as u16; // header + members + padding
         let detail_height = 6u16;
-        let alarm_height = if data.alarms.is_empty() { 2 } else { (data.alarms.len() + 2) as u16 };
+        let alarm_height = if data.alarms.is_empty() {
+            2
+        } else {
+            (data.alarms.len() + 2) as u16
+        };
 
         // Total content height (excluding flexible space)
         let content_height = 3 + table_height + 1 + detail_height + 1 + alarm_height + 1;
@@ -613,25 +669,25 @@ impl Component for EtcdComponent {
         let chunks = if area.height > content_height + 10 {
             // Large terminal: add breathing room between sections
             Layout::vertical([
-                Constraint::Length(3),              // Status bar (with padding)
-                Constraint::Length(table_height),   // Member table
-                Constraint::Length(2),              // Spacer
-                Constraint::Length(detail_height),  // Detail section
-                Constraint::Length(2),              // Spacer
-                Constraint::Length(alarm_height),   // Alarms
-                Constraint::Fill(1),                // Flexible space before footer
-                Constraint::Length(1),              // Footer
+                Constraint::Length(3),             // Status bar (with padding)
+                Constraint::Length(table_height),  // Member table
+                Constraint::Length(2),             // Spacer
+                Constraint::Length(detail_height), // Detail section
+                Constraint::Length(2),             // Spacer
+                Constraint::Length(alarm_height),  // Alarms
+                Constraint::Fill(1),               // Flexible space before footer
+                Constraint::Length(1),             // Footer
             ])
             .split(area)
         } else {
             // Compact terminal: minimal spacing
             Layout::vertical([
-                Constraint::Length(2),              // Status bar
-                Constraint::Length(table_height),   // Member table
-                Constraint::Length(detail_height),  // Detail section
-                Constraint::Length(alarm_height),   // Alarms
-                Constraint::Fill(1),                // Flexible space
-                Constraint::Length(1),              // Footer
+                Constraint::Length(2),             // Status bar
+                Constraint::Length(table_height),  // Member table
+                Constraint::Length(detail_height), // Detail section
+                Constraint::Length(alarm_height),  // Alarms
+                Constraint::Fill(1),               // Flexible space
+                Constraint::Length(1),             // Footer
             ])
             .split(area)
         };

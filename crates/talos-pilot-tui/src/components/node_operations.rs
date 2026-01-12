@@ -4,17 +4,19 @@
 
 use crate::action::Action;
 use crate::components::Component;
-use crate::components::diagnostics::k8s::{check_pdb_health, create_k8s_client, DrainOptions, PdbHealthInfo};
+use crate::components::diagnostics::k8s::{
+    DrainOptions, PdbHealthInfo, check_pdb_health, create_k8s_client,
+};
 use crate::ui_ext::SafetyStatusExt;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use kube::Client;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 use std::sync::{Arc, Mutex};
 use talos_pilot_core::{AsyncState, SafetyStatus};
@@ -106,8 +108,10 @@ async fn run_drain_operation(
     k8s_client: Option<Client>,
     options: DrainOptions,
 ) -> OperationResult {
-    use crate::audit::{audit_start, audit_success, audit_failure};
-    use crate::components::diagnostics::k8s::{cordon_node, uncordon_node, drain_node_with_progress, DrainProgressCallback};
+    use crate::audit::{audit_failure, audit_start, audit_success};
+    use crate::components::diagnostics::k8s::{
+        DrainProgressCallback, cordon_node, drain_node_with_progress, uncordon_node,
+    };
 
     audit_start("DRAIN", &hostname, "Starting drain operation");
 
@@ -164,7 +168,10 @@ async fn run_drain_operation(
             if result.success {
                 let mut msg = format!("Drained {} pods", result.pods_evicted);
                 if !result.force_deleted_pods.is_empty() {
-                    msg.push_str(&format!(" ({} force-deleted)", result.force_deleted_pods.len()));
+                    msg.push_str(&format!(
+                        " ({} force-deleted)",
+                        result.force_deleted_pods.len()
+                    ));
                 }
                 audit_success("DRAIN", &hostname, &msg);
                 OperationResult {
@@ -219,8 +226,10 @@ async fn run_reboot_operation(
     talos_client: Option<TalosClient>,
     options: DrainOptions,
 ) -> OperationResult {
-    use crate::audit::{audit_start, audit_success, audit_failure};
-    use crate::components::diagnostics::k8s::{cordon_node, uncordon_node, drain_node_with_progress, DrainProgressCallback};
+    use crate::audit::{audit_failure, audit_start, audit_success};
+    use crate::components::diagnostics::k8s::{
+        DrainProgressCallback, cordon_node, drain_node_with_progress, uncordon_node,
+    };
     use talos_rs::RebootMode;
 
     audit_start("REBOOT", &hostname, "Starting reboot operation");
@@ -361,7 +370,7 @@ async fn run_reboot_operation(
 
     // Step 4: Wait for node to come back (if configured)
     if options.wait_for_node_ready {
-        use crate::components::diagnostics::k8s::{wait_for_node_ready, NodeReadyProgressCallback};
+        use crate::components::diagnostics::k8s::{NodeReadyProgressCallback, wait_for_node_ready};
 
         let progress_clone = progress.clone();
         let ready_callback: NodeReadyProgressCallback = Box::new(move |msg: &str| {
@@ -376,7 +385,8 @@ async fn run_reboot_operation(
             options.post_reboot_timeout_secs,
             true, // wait for disconnect first
             Some(ready_callback),
-        ).await;
+        )
+        .await;
 
         match ready_result {
             Ok(result) if result.success => {
@@ -558,11 +568,8 @@ impl NodeOperationsComponent {
                 match futures::executor::block_on(task) {
                     Ok(result) => {
                         if let OperationState::Executing(op_type, _) = &self.operation_state {
-                            self.operation_state = OperationState::Completed(
-                                *op_type,
-                                result.success,
-                                result.message,
-                            );
+                            self.operation_state =
+                                OperationState::Completed(*op_type, result.success, result.message);
                         }
                     }
                     Err(e) => {
@@ -579,7 +586,8 @@ impl NodeOperationsComponent {
                 // Task still running - update progress message from shared state
                 if let OperationState::Executing(op_type, _) = &self.operation_state {
                     let progress = self.operation_progress.lock().unwrap();
-                    self.operation_state = OperationState::Executing(*op_type, progress.message.clone());
+                    self.operation_state =
+                        OperationState::Executing(*op_type, progress.message.clone());
                 }
             }
         }
@@ -606,7 +614,15 @@ impl NodeOperationsComponent {
                     run_drain_operation(progress, hostname, k8s_client, drain_options).await
                 }
                 OperationType::Reboot => {
-                    run_reboot_operation(progress, hostname, address, k8s_client, talos_client, drain_options).await
+                    run_reboot_operation(
+                        progress,
+                        hostname,
+                        address,
+                        k8s_client,
+                        talos_client,
+                        drain_options,
+                    )
+                    .await
                 }
             }
         });
@@ -668,9 +684,9 @@ impl NodeOperationsComponent {
 
                 // Check if this node is a member
                 let node_addr = self.address.split(':').next().unwrap_or(&self.address);
-                let is_member = members.iter().any(|m| {
-                    m.peer_urls.iter().any(|url| url.contains(node_addr))
-                });
+                let is_member = members
+                    .iter()
+                    .any(|m| m.peer_urls.iter().any(|url| url.contains(node_addr)));
 
                 // Try to get leader info
                 let is_leader = match client.etcd_status().await {
@@ -679,7 +695,8 @@ impl NodeOperationsComponent {
                         statuses.iter().any(|s| {
                             let member = members.iter().find(|m| m.id == s.member_id);
                             if let Some(m) = member {
-                                m.peer_urls.iter().any(|url| url.contains(node_addr)) && s.is_leader()
+                                m.peer_urls.iter().any(|url| url.contains(node_addr))
+                                    && s.is_leader()
                             } else {
                                 false
                             }
@@ -694,11 +711,10 @@ impl NodeOperationsComponent {
 
                 // Get healthy member count
                 let healthy = match client.etcd_status().await {
-                    Ok(statuses) => {
-                        members.iter().filter(|m| {
-                            statuses.iter().any(|s| s.member_id == m.id)
-                        }).count()
-                    }
+                    Ok(statuses) => members
+                        .iter()
+                        .filter(|m| statuses.iter().any(|s| s.member_id == m.id))
+                        .count(),
                     Err(_) => total, // Assume all healthy if can't get status
                 };
 
@@ -758,7 +774,8 @@ impl NodeOperationsComponent {
         let Some(data) = self.data_mut() else { return };
 
         // Reboot safety = etcd safety (for CP) + drain safety
-        let etcd_safety = data.etcd_info
+        let etcd_safety = data
+            .etcd_info
             .as_ref()
             .map(|e| e.safety_status())
             .unwrap_or(SafetyStatus::Unknown);
@@ -787,7 +804,6 @@ impl NodeOperationsComponent {
             _ => SafetyStatus::Unknown,
         };
     }
-
 
     /// Draw the overlay
     fn draw_overlay(&self, frame: &mut Frame, area: Rect) {
@@ -827,49 +843,58 @@ impl NodeOperationsComponent {
             OperationType::Drain => Color::Yellow,
         };
 
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {} node '{}'?", op_name, self.hostname),
-                Style::default().fg(warning_color).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {} node '{}'?", op_name, self.hostname),
+            Style::default()
+                .fg(warning_color)
+                .add_modifier(Modifier::BOLD),
+        )]));
 
         lines.push(Line::from(""));
 
         // Show what will happen
         match op_type {
             OperationType::Reboot => {
-                lines.push(Line::from(vec![
-                    Span::raw("  This will:"),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled("    1. Cordon the node", Style::default().fg(Color::DarkGray)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled("    2. Drain all pods", Style::default().fg(Color::DarkGray)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled("    3. Reboot via Talos API", Style::default().fg(Color::DarkGray)),
-                ]));
+                lines.push(Line::from(vec![Span::raw("  This will:")]));
+                lines.push(Line::from(vec![Span::styled(
+                    "    1. Cordon the node",
+                    Style::default().fg(Color::DarkGray),
+                )]));
+                lines.push(Line::from(vec![Span::styled(
+                    "    2. Drain all pods",
+                    Style::default().fg(Color::DarkGray),
+                )]));
+                lines.push(Line::from(vec![Span::styled(
+                    "    3. Reboot via Talos API",
+                    Style::default().fg(Color::DarkGray),
+                )]));
             }
             OperationType::Drain => {
-                lines.push(Line::from(vec![
-                    Span::raw("  This will:"),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled("    1. Cordon the node", Style::default().fg(Color::DarkGray)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled("    2. Evict all pods", Style::default().fg(Color::DarkGray)),
-                ]));
+                lines.push(Line::from(vec![Span::raw("  This will:")]));
+                lines.push(Line::from(vec![Span::styled(
+                    "    1. Cordon the node",
+                    Style::default().fg(Color::DarkGray),
+                )]));
+                lines.push(Line::from(vec![Span::styled(
+                    "    2. Evict all pods",
+                    Style::default().fg(Color::DarkGray),
+                )]));
             }
         }
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("  [y]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  [y]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" Confirm    "),
-            Span::styled("[n]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[n]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" Cancel"),
         ]));
 
@@ -884,7 +909,13 @@ impl NodeOperationsComponent {
     }
 
     /// Draw executing dialog
-    fn draw_executing_dialog(&self, frame: &mut Frame, area: Rect, op_type: OperationType, msg: &str) {
+    fn draw_executing_dialog(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        op_type: OperationType,
+        msg: &str,
+    ) {
         let overlay_width = 50.min(area.width.saturating_sub(4));
         let overlay_height = 7.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(overlay_width)) / 2;
@@ -895,20 +926,22 @@ impl NodeOperationsComponent {
 
         let mut lines = Vec::new();
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {} {}...", op_type.name(), self.hostname),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {} {}...", op_type.name(), self.hostname),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {}", msg), Style::default().fg(Color::Cyan)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", msg),
+            Style::default().fg(Color::Cyan),
+        )]));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Please wait...", Style::default().fg(Color::DarkGray)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Please wait...",
+            Style::default().fg(Color::DarkGray),
+        )]));
 
         let title = format!(" {} in Progress ", op_type.name());
         let block = Block::default()
@@ -921,7 +954,14 @@ impl NodeOperationsComponent {
     }
 
     /// Draw completed dialog
-    fn draw_completed_dialog(&self, frame: &mut Frame, area: Rect, op_type: OperationType, success: bool, msg: &str) {
+    fn draw_completed_dialog(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        op_type: OperationType,
+        success: bool,
+        msg: &str,
+    ) {
         let overlay_width = 50.min(area.width.saturating_sub(4));
         let overlay_height = 8.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(overlay_width)) / 2;
@@ -938,23 +978,23 @@ impl NodeOperationsComponent {
 
         let mut lines = Vec::new();
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {} {} {}", status_icon, op_type.name(), status_text),
-                Style::default().fg(status_color).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {} {} {}", status_icon, op_type.name(), status_text),
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        )]));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(format!("  Node: {}", self.hostname), Style::default().fg(Color::Cyan)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::raw(format!("  {}", msg)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  Node: {}", self.hostname),
+            Style::default().fg(Color::Cyan),
+        )]));
+        lines.push(Line::from(vec![Span::raw(format!("  {}", msg))]));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Press any key to continue...", Style::default().fg(Color::DarkGray)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Press any key to continue...",
+            Style::default().fg(Color::DarkGray),
+        )]));
 
         let title = format!(" {} {} ", op_type.name(), status_text);
         let block = Block::default()
@@ -994,17 +1034,26 @@ impl NodeOperationsComponent {
         lines.push(Line::from(vec![
             Span::raw("  Role: "),
             Span::styled(
-                if self.is_controlplane { "controlplane" } else { "worker" },
-                Style::default().fg(if self.is_controlplane { Color::Yellow } else { Color::Green }),
+                if self.is_controlplane {
+                    "controlplane"
+                } else {
+                    "worker"
+                },
+                Style::default().fg(if self.is_controlplane {
+                    Color::Yellow
+                } else {
+                    Color::Green
+                }),
             ),
         ]));
 
         // etcd info (for control plane)
         if self.is_controlplane {
             lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  etcd Status", Style::default().fg(Color::Yellow)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "  etcd Status",
+                Style::default().fg(Color::Yellow),
+            )]));
 
             if let Some(ref etcd) = data.and_then(|d| d.etcd_info.as_ref()) {
                 let (indicator, color) = etcd.safety_status().indicator_with_color();
@@ -1013,16 +1062,29 @@ impl NodeOperationsComponent {
                 lines.push(Line::from(vec![
                     Span::raw("    "),
                     Span::styled(indicator, Style::default().fg(color)),
-                    Span::raw(format!(" {}/{} members ({})", etcd.healthy_members, etcd.total_members, role)),
+                    Span::raw(format!(
+                        " {}/{} members ({})",
+                        etcd.healthy_members, etcd.total_members, role
+                    )),
                 ]));
 
                 if etcd.is_member {
                     let after_text = if etcd.quorum_maintained {
-                        format!("After: {}/{} (quorum OK)", etcd.members_after, etcd.total_members)
+                        format!(
+                            "After: {}/{} (quorum OK)",
+                            etcd.members_after, etcd.total_members
+                        )
                     } else {
-                        format!("After: {}/{} (QUORUM LOST)", etcd.members_after, etcd.total_members)
+                        format!(
+                            "After: {}/{} (QUORUM LOST)",
+                            etcd.members_after, etcd.total_members
+                        )
                     };
-                    let after_color = if etcd.quorum_maintained { Color::Green } else { Color::Red };
+                    let after_color = if etcd.quorum_maintained {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    };
                     lines.push(Line::from(vec![
                         Span::raw("    "),
                         Span::styled(after_text, Style::default().fg(after_color)),
@@ -1031,19 +1093,25 @@ impl NodeOperationsComponent {
             } else {
                 lines.push(Line::from(vec![
                     Span::raw("    "),
-                    Span::styled("? Unable to fetch etcd status", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        "? Unable to fetch etcd status",
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]));
             }
         }
 
         // PDB info
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Drain Safety", Style::default().fg(Color::Yellow)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Drain Safety",
+            Style::default().fg(Color::Yellow),
+        )]));
 
         if let Some(ref pdb) = data.and_then(|d| d.pdb_info.as_ref()) {
-            let drain_safety = data.map(|d| &d.drain_safety).unwrap_or(&SafetyStatus::Unknown);
+            let drain_safety = data
+                .map(|d| &d.drain_safety)
+                .unwrap_or(&SafetyStatus::Unknown);
             let (indicator, color) = drain_safety.indicator_with_color();
             lines.push(Line::from(vec![
                 Span::raw("    "),
@@ -1073,21 +1141,29 @@ impl NodeOperationsComponent {
         } else {
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled("? Unable to fetch PDB status", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "? Unable to fetch PDB status",
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]));
         }
 
         // Operations section
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Operations", Style::default().fg(Color::Yellow)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Operations",
+            Style::default().fg(Color::Yellow),
+        )]));
 
         // Reboot operation
-        let reboot_safety = data.map(|d| &d.reboot_safety).unwrap_or(&SafetyStatus::Unknown);
+        let reboot_safety = data
+            .map(|d| &d.reboot_safety)
+            .unwrap_or(&SafetyStatus::Unknown);
         let (reboot_ind, reboot_color) = reboot_safety.indicator_with_color();
         let reboot_style = if self.selected_op == 0 {
-            Style::default().fg(reboot_color).add_modifier(Modifier::REVERSED)
+            Style::default()
+                .fg(reboot_color)
+                .add_modifier(Modifier::REVERSED)
         } else {
             Style::default().fg(reboot_color)
         };
@@ -1098,10 +1174,14 @@ impl NodeOperationsComponent {
         ]));
 
         // Drain operation
-        let drain_safety = data.map(|d| &d.drain_safety).unwrap_or(&SafetyStatus::Unknown);
+        let drain_safety = data
+            .map(|d| &d.drain_safety)
+            .unwrap_or(&SafetyStatus::Unknown);
         let (drain_ind, drain_color) = drain_safety.indicator_with_color();
         let drain_style = if self.selected_op == 1 {
-            Style::default().fg(drain_color).add_modifier(Modifier::REVERSED)
+            Style::default()
+                .fg(drain_color)
+                .add_modifier(Modifier::REVERSED)
         } else {
             Style::default().fg(drain_color)
         };
@@ -1113,9 +1193,10 @@ impl NodeOperationsComponent {
 
         // Footer
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  [q] Cancel", Style::default().fg(Color::DarkGray)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  [q] Cancel",
+            Style::default().fg(Color::DarkGray),
+        )]));
 
         // Render
         let title = format!(" Node: {} ", self.hostname);
@@ -1149,7 +1230,8 @@ impl Component for NodeOperationsComponent {
                     }
                     KeyCode::Enter => {
                         // Trigger the selected operation
-                        let reboot_unsafe = self.data()
+                        let reboot_unsafe = self
+                            .data()
                             .map(|d| matches!(d.reboot_safety, SafetyStatus::Unsafe(_)))
                             .unwrap_or(true);
                         match self.selected_op {
@@ -1159,13 +1241,15 @@ impl Component for NodeOperationsComponent {
                                     tracing::warn!("Reboot blocked due to unsafe status");
                                     Ok(None)
                                 } else {
-                                    self.operation_state = OperationState::Confirming(OperationType::Reboot);
+                                    self.operation_state =
+                                        OperationState::Confirming(OperationType::Reboot);
                                     Ok(None)
                                 }
                             }
                             1 => {
                                 // Drain
-                                self.operation_state = OperationState::Confirming(OperationType::Drain);
+                                self.operation_state =
+                                    OperationState::Confirming(OperationType::Drain);
                                 Ok(None)
                             }
                             _ => Ok(None),
@@ -1173,7 +1257,8 @@ impl Component for NodeOperationsComponent {
                     }
                     KeyCode::Char('r') => {
                         // Check safety before allowing
-                        let reboot_unsafe = self.data()
+                        let reboot_unsafe = self
+                            .data()
                             .map(|d| matches!(d.reboot_safety, SafetyStatus::Unsafe(_)))
                             .unwrap_or(true);
                         if reboot_unsafe {
@@ -1181,7 +1266,8 @@ impl Component for NodeOperationsComponent {
                             tracing::warn!("Reboot blocked due to unsafe status");
                             Ok(None)
                         } else {
-                            self.operation_state = OperationState::Confirming(OperationType::Reboot);
+                            self.operation_state =
+                                OperationState::Confirming(OperationType::Reboot);
                             Ok(None)
                         }
                     }

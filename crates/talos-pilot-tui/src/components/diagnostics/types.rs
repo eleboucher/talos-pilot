@@ -22,7 +22,10 @@ pub enum FixAction {
     /// Install Cilium CNI
     InstallCilium,
     /// Run a command on the host (for Docker environments)
-    HostCommand { command: String, description: String },
+    HostCommand {
+        command: String,
+        description: String,
+    },
 }
 
 impl FixAction {
@@ -31,7 +34,9 @@ impl FixAction {
         match self {
             FixAction::AddKernelModule(name) => format!("Add {} kernel module", name),
             FixAction::RestartService(name) => format!("Restart {} service", name),
-            FixAction::ApplyConfigPatch { requires_reboot, .. } => {
+            FixAction::ApplyConfigPatch {
+                requires_reboot, ..
+            } => {
                 if *requires_reboot {
                     "Apply config patch (requires reboot)".to_string()
                 } else {
@@ -48,7 +53,11 @@ impl FixAction {
     pub fn requires_reboot(&self) -> bool {
         matches!(
             self,
-            FixAction::AddKernelModule(_) | FixAction::ApplyConfigPatch { requires_reboot: true, .. }
+            FixAction::AddKernelModule(_)
+                | FixAction::ApplyConfigPatch {
+                    requires_reboot: true,
+                    ..
+                }
         )
     }
 

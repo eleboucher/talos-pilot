@@ -30,16 +30,10 @@ pub const EXTERNAL_SECRETS_CRDS: &[&str] = &[
 ];
 
 /// Kyverno CRDs for detection
-pub const KYVERNO_CRDS: &[&str] = &[
-    "clusterpolicies.kyverno.io",
-    "policies.kyverno.io",
-];
+pub const KYVERNO_CRDS: &[&str] = &["clusterpolicies.kyverno.io", "policies.kyverno.io"];
 
 /// ArgoCD CRDs for detection
-pub const ARGOCD_CRDS: &[&str] = &[
-    "applications.argoproj.io",
-    "appprojects.argoproj.io",
-];
+pub const ARGOCD_CRDS: &[&str] = &["applications.argoproj.io", "appprojects.argoproj.io"];
 
 /// Flux CRDs for detection
 pub const FLUX_CRDS: &[&str] = &[

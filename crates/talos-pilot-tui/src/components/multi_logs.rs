@@ -5,15 +5,18 @@ use crate::components::Component;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame,
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
 };
 use std::collections::HashSet;
-use talos_pilot_core::constants::MAX_LOG_ENTRIES;
 use talos_pilot_core::AsyncState;
+use talos_pilot_core::constants::MAX_LOG_ENTRIES;
 
 /// Maximum lines to process per tick during streaming
 /// Higher = more responsive but could block UI if too high
@@ -224,9 +227,15 @@ impl MultiLogsComponent {
     /// Create a new multi-logs component
     /// - active_services: services to initially show logs for
     /// - all_services: all available services (inactive ones shown greyed out in sidebar)
-    pub fn new(node_ip: String, node_role: String, active_services: Vec<String>, all_services: Vec<String>) -> Self {
+    pub fn new(
+        node_ip: String,
+        node_role: String,
+        active_services: Vec<String>,
+        all_services: Vec<String>,
+    ) -> Self {
         // Build a set of active service IDs for quick lookup
-        let active_set: std::collections::HashSet<&str> = active_services.iter().map(|s| s.as_str()).collect();
+        let active_set: std::collections::HashSet<&str> =
+            active_services.iter().map(|s| s.as_str()).collect();
 
         // Assign colors to services deterministically
         let services: Vec<ServiceState> = all_services
@@ -248,11 +257,31 @@ impl MultiLogsComponent {
 
         // Initialize level filters (all active by default)
         let levels = vec![
-            LevelState { level: LogLevel::Error, active: true, entry_count: 0 },
-            LevelState { level: LogLevel::Warn, active: true, entry_count: 0 },
-            LevelState { level: LogLevel::Info, active: true, entry_count: 0 },
-            LevelState { level: LogLevel::Debug, active: true, entry_count: 0 },
-            LevelState { level: LogLevel::Unknown, active: true, entry_count: 0 },
+            LevelState {
+                level: LogLevel::Error,
+                active: true,
+                entry_count: 0,
+            },
+            LevelState {
+                level: LogLevel::Warn,
+                active: true,
+                entry_count: 0,
+            },
+            LevelState {
+                level: LogLevel::Info,
+                active: true,
+                entry_count: 0,
+            },
+            LevelState {
+                level: LogLevel::Debug,
+                active: true,
+                entry_count: 0,
+            },
+            LevelState {
+                level: LogLevel::Unknown,
+                active: true,
+                entry_count: 0,
+            },
         ];
         let mut levels_state = ListState::default();
         levels_state.select(Some(0));
@@ -392,7 +421,9 @@ impl MultiLogsComponent {
             if count >= MAX_LINES_PER_TICK {
                 // Check if there's more in the channel (indicates backlog)
                 if rx.try_recv().is_ok() {
-                    tracing::debug!("Log stream channel has backlog, may be dropping older entries");
+                    tracing::debug!(
+                        "Log stream channel has backlog, may be dropping older entries"
+                    );
                     // Drain remainder to prevent unbounded growth, but don't process
                     while rx.try_recv().is_ok() {
                         // Discard to prevent memory growth
@@ -457,24 +488,29 @@ impl MultiLogsComponent {
             let entries = &data.entries;
 
             // Service counts: total entries for each service (not filtered)
-            let service_counts: Vec<_> = self.services
+            let service_counts: Vec<_> = self
+                .services
                 .iter()
                 .map(|s| entries.iter().filter(|e| e.service_id == s.id).count())
                 .collect();
 
             // Level counts: filtered by active services
-            let active_services: HashSet<&str> = self.services
+            let active_services: HashSet<&str> = self
+                .services
                 .iter()
                 .filter(|s| s.active)
                 .map(|s| s.id.as_str())
                 .collect();
 
-            let level_counts: Vec<_> = self.levels
+            let level_counts: Vec<_> = self
+                .levels
                 .iter()
                 .map(|l| {
                     entries
                         .iter()
-                        .filter(|e| active_services.contains(e.service_id.as_str()) && e.level == l.level)
+                        .filter(|e| {
+                            active_services.contains(e.service_id.as_str()) && e.level == l.level
+                        })
                         .count()
                 })
                 .collect();
@@ -577,7 +613,9 @@ impl MultiLogsComponent {
                 if date_part.len() == 4 && date_part.chars().all(|c| c.is_ascii_digit()) {
                     // Find the time part after the space
                     let after_date = &line[space_pos + 2..];
-                    if let Some(time_end) = after_date.find(|c: char| !c.is_ascii_digit() && c != ':' && c != '.') {
+                    if let Some(time_end) =
+                        after_date.find(|c: char| !c.is_ascii_digit() && c != ':' && c != '.')
+                    {
                         let time_part = &after_date[..time_end];
                         if time_part.contains(':') {
                             let rest_start = space_pos + 2 + time_end;
@@ -587,9 +625,12 @@ impl MultiLogsComponent {
                             // Use current year since klog doesn't include year
                             let month: i64 = date_part[0..2].parse().unwrap_or(1);
                             let day: i64 = date_part[2..4].parse().unwrap_or(1);
-                            let hour: i64 = short_ts.get(0..2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                            let min: i64 = short_ts.get(3..5).and_then(|s| s.parse().ok()).unwrap_or(0);
-                            let sec: i64 = short_ts.get(6..8).and_then(|s| s.parse().ok()).unwrap_or(0);
+                            let hour: i64 =
+                                short_ts.get(0..2).and_then(|s| s.parse().ok()).unwrap_or(0);
+                            let min: i64 =
+                                short_ts.get(3..5).and_then(|s| s.parse().ok()).unwrap_or(0);
+                            let sec: i64 =
+                                short_ts.get(6..8).and_then(|s| s.parse().ok()).unwrap_or(0);
                             let year = Self::current_year();
                             let sort_key = Self::datetime_to_unix(year, month, day, hour, min, sec);
                             return (short_ts, sort_key, rest);
@@ -661,7 +702,14 @@ impl MultiLogsComponent {
                 has_colon = true;
             }
 
-            if c.is_ascii_digit() || *c == '/' || *c == '-' || *c == ':' || *c == '.' || *c == 'T' || *c == 'Z' {
+            if c.is_ascii_digit()
+                || *c == '/'
+                || *c == '-'
+                || *c == ':'
+                || *c == '.'
+                || *c == 'T'
+                || *c == 'Z'
+            {
                 end = i + 1;
             } else if *c == ' ' {
                 // Allow space between date and time (2024-01-09 16:42:01)
@@ -900,13 +948,15 @@ impl MultiLogsComponent {
     /// Rebuild visible indices based on active services
     fn rebuild_visible_indices(&mut self) {
         // Clone to owned strings to avoid borrow issues
-        let active_services: HashSet<String> = self.services
+        let active_services: HashSet<String> = self
+            .services
             .iter()
             .filter(|s| s.active)
             .map(|s| s.id.clone())
             .collect();
 
-        let active_levels: HashSet<LogLevel> = self.levels
+        let active_levels: HashSet<LogLevel> = self
+            .levels
             .iter()
             .filter(|l| l.active)
             .map(|l| l.level)
@@ -915,7 +965,8 @@ impl MultiLogsComponent {
         let total = {
             let Some(data) = self.data_mut() else { return };
 
-            data.visible_indices = data.entries
+            data.visible_indices = data
+                .entries
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| {
@@ -1028,7 +1079,9 @@ impl MultiLogsComponent {
     /// Get the entry at the cursor position
     fn current_entry(&self) -> Option<&MultiLogEntry> {
         let data = self.data()?;
-        data.visible_indices.get(self.cursor).and_then(|&i| data.entries.get(i))
+        data.visible_indices
+            .get(self.cursor)
+            .and_then(|&i| data.entries.get(i))
     }
 
     /// Check if visual selection mode is active
@@ -1038,9 +1091,8 @@ impl MultiLogsComponent {
 
     /// Get the selection range (start, end) in visible indices, inclusive
     fn selection_range(&self) -> Option<(usize, usize)> {
-        self.selection_start.map(|anchor| {
-            (anchor.min(self.cursor), anchor.max(self.cursor))
-        })
+        self.selection_start
+            .map(|anchor| (anchor.min(self.cursor), anchor.max(self.cursor)))
     }
 
     /// Check if a visible index is the cursor position
@@ -1083,7 +1135,8 @@ impl MultiLogsComponent {
             // Yank all selected lines
             (start..=end)
                 .filter_map(|vi| {
-                    data.visible_indices.get(vi)
+                    data.visible_indices
+                        .get(vi)
                         .and_then(|&i| data.entries.get(i))
                         .map(Self::format_entry)
                 })
@@ -1126,7 +1179,9 @@ impl MultiLogsComponent {
             data.visible_indices
                 .iter()
                 .enumerate()
-                .filter(|&(_, entry_idx)| data.entries[*entry_idx].search_text.contains(&query_lower))
+                .filter(|&(_, entry_idx)| {
+                    data.entries[*entry_idx].search_text.contains(&query_lower)
+                })
                 .map(|(vi, _)| vi)
                 .collect()
         };
@@ -1228,32 +1283,32 @@ impl MultiLogsComponent {
     fn draw_services_panel(&mut self, frame: &mut Frame, area: Rect) {
         // Filter services by search query if searching
         let query_lower = self.search_query.to_lowercase();
-        let filtered_services: Vec<(usize, &ServiceState)> = if self.search_mode != SearchMode::Off && !self.search_query.is_empty() {
-            self.services
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| s.id.to_lowercase().contains(&query_lower))
-                .collect()
-        } else {
-            self.services.iter().enumerate().collect()
-        };
+        let filtered_services: Vec<(usize, &ServiceState)> =
+            if self.search_mode != SearchMode::Off && !self.search_query.is_empty() {
+                self.services
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.id.to_lowercase().contains(&query_lower))
+                    .collect()
+            } else {
+                self.services.iter().enumerate().collect()
+            };
 
         if filtered_services.is_empty() {
             return; // Don't show panel if no services match
         }
 
         // Calculate panel size based on filtered service names
-        let max_name_len = filtered_services.iter().map(|(_, s)| s.id.len()).max().unwrap_or(8);
+        let max_name_len = filtered_services
+            .iter()
+            .map(|(_, s)| s.id.len())
+            .max()
+            .unwrap_or(8);
         let panel_width = (max_name_len + 4).max(16).min(area.width as usize - 4) as u16;
         let panel_height = (filtered_services.len() + 2).min(area.height as usize - 2) as u16;
 
         // Position in top-left with small margin
-        let panel_area = Rect::new(
-            area.x + 1,
-            area.y,
-            panel_width,
-            panel_height,
-        );
+        let panel_area = Rect::new(area.x + 1, area.y, panel_width, panel_height);
 
         // Clear the background
         frame.render_widget(ratatui::widgets::Clear, panel_area);
@@ -1306,17 +1361,13 @@ impl MultiLogsComponent {
         let panel_height = (self.levels.len() + 2).min(area.height as usize - 2) as u16;
 
         // Position in top-left with small margin
-        let panel_area = Rect::new(
-            area.x + 1,
-            area.y,
-            panel_width,
-            panel_height,
-        );
+        let panel_area = Rect::new(area.x + 1, area.y, panel_width, panel_height);
 
         // Clear the background
         frame.render_widget(ratatui::widgets::Clear, panel_area);
 
-        let items: Vec<ListItem> = self.levels
+        let items: Vec<ListItem> = self
+            .levels
             .iter()
             .map(|l| {
                 let indicator = if l.active { "●" } else { "○" };
@@ -1467,7 +1518,9 @@ impl MultiLogsComponent {
                     if chunk_start == 0 {
                         // First line: use the prefix spans we already built
                         if is_match && !self.search_query.is_empty() {
-                            spans.extend(self.render_message_with_highlight(&chunk, is_current_match));
+                            spans.extend(
+                                self.render_message_with_highlight(&chunk, is_current_match),
+                            );
                         } else {
                             spans.push(Span::raw(chunk));
                         }
@@ -1478,7 +1531,9 @@ impl MultiLogsComponent {
                         let indent = " ".repeat(prefix_width);
                         let mut cont_spans = vec![Span::raw(indent)];
                         if is_match && !self.search_query.is_empty() {
-                            cont_spans.extend(self.render_message_with_highlight(&chunk, is_current_match));
+                            cont_spans.extend(
+                                self.render_message_with_highlight(&chunk, is_current_match),
+                            );
                         } else {
                             cont_spans.push(Span::raw(chunk));
                         }
@@ -1488,14 +1543,20 @@ impl MultiLogsComponent {
                 }
             } else if entry.message.len() <= available {
                 if is_match && !self.search_query.is_empty() {
-                    spans.extend(self.render_message_with_highlight(&entry.message, is_current_match));
+                    spans.extend(
+                        self.render_message_with_highlight(&entry.message, is_current_match),
+                    );
                 } else {
                     spans.push(Span::raw(entry.message.clone()));
                 }
                 lines.push(Line::from(spans).style(line_style));
             } else {
                 // Truncate mode
-                let truncated: String = entry.message.chars().take(available.saturating_sub(1)).collect();
+                let truncated: String = entry
+                    .message
+                    .chars()
+                    .take(available.saturating_sub(1))
+                    .collect();
                 if is_match && !self.search_query.is_empty() {
                     spans.extend(self.render_message_with_highlight(&truncated, is_current_match));
                 } else {
@@ -1554,9 +1615,7 @@ impl Component for MultiLogsComponent {
 
         match key.code {
             // Quit/back
-            KeyCode::Char('q') => {
-                Ok(Some(Action::Back))
-            }
+            KeyCode::Char('q') => Ok(Some(Action::Back)),
             KeyCode::Esc => {
                 if self.in_visual_mode() {
                     self.selection_start = None;
@@ -1624,16 +1683,22 @@ impl Component for MultiLogsComponent {
             KeyCode::Down | KeyCode::Char('j') => {
                 match self.floating_pane {
                     FloatingPane::Services => {
-                        self.selected_service = (self.selected_service + 1).min(self.services.len().saturating_sub(1));
+                        self.selected_service =
+                            (self.selected_service + 1).min(self.services.len().saturating_sub(1));
                         self.sidebar_state.select(Some(self.selected_service));
                     }
                     FloatingPane::Levels => {
-                        self.selected_level = (self.selected_level + 1).min(self.levels.len().saturating_sub(1));
+                        self.selected_level =
+                            (self.selected_level + 1).min(self.levels.len().saturating_sub(1));
                         self.levels_state.select(Some(self.selected_level));
                     }
                     FloatingPane::None => {
                         // Always move cursor down
-                        let max_idx = self.data().map(|d| d.visible_indices.len()).unwrap_or(0).saturating_sub(1);
+                        let max_idx = self
+                            .data()
+                            .map(|d| d.visible_indices.len())
+                            .unwrap_or(0)
+                            .saturating_sub(1);
                         self.cursor = (self.cursor + 1).min(max_idx);
                         // Scroll viewport if cursor goes below visible area
                         let viewport = self.viewport_height as usize;
@@ -1657,7 +1722,11 @@ impl Component for MultiLogsComponent {
             }
             KeyCode::PageDown => {
                 // Always move cursor
-                let max_idx = self.data().map(|d| d.visible_indices.len()).unwrap_or(0).saturating_sub(1);
+                let max_idx = self
+                    .data()
+                    .map(|d| d.visible_indices.len())
+                    .unwrap_or(0)
+                    .saturating_sub(1);
                 self.cursor = (self.cursor + 20).min(max_idx);
                 let viewport = self.viewport_height as usize;
                 let visible_end = self.scroll as usize + viewport;
@@ -1683,7 +1752,11 @@ impl Component for MultiLogsComponent {
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let half = (self.viewport_height / 2).max(1) as usize;
                 // Always move cursor down by half page
-                let max_idx = self.data().map(|d| d.visible_indices.len()).unwrap_or(0).saturating_sub(1);
+                let max_idx = self
+                    .data()
+                    .map(|d| d.visible_indices.len())
+                    .unwrap_or(0)
+                    .saturating_sub(1);
                 self.cursor = (self.cursor + half).min(max_idx);
                 // Scroll to keep cursor visible
                 let viewport = self.viewport_height as usize;
@@ -1866,9 +1939,14 @@ impl Component for MultiLogsComponent {
             Span::raw(format!(" ({})", self.node_role)).dim(),
             Span::raw("  "),
             follow_indicator,
-            Span::raw(format!(" [{}/{} svcs, {}/{} lvls]",
-                self.active_count(), self.services.len(),
-                self.active_level_count(), self.levels.len())).dim(),
+            Span::raw(format!(
+                " [{}/{} svcs, {}/{} lvls]",
+                self.active_count(),
+                self.services.len(),
+                self.active_level_count(),
+                self.levels.len()
+            ))
+            .dim(),
         ];
 
         // Show match count when searching
@@ -1880,7 +1958,10 @@ impl Component for MultiLogsComponent {
             ));
         } else if self.search_mode != SearchMode::Off && !self.search_query.is_empty() {
             header_spans.push(Span::raw("  "));
-            header_spans.push(Span::styled("[no matches]", Style::default().fg(Color::Red)));
+            header_spans.push(Span::styled(
+                "[no matches]",
+                Style::default().fg(Color::Red),
+            ));
         }
 
         // Show visual selection indicator
@@ -1919,7 +2000,11 @@ impl Component for MultiLogsComponent {
         // Search bar
         if has_search_bar {
             let search_area = main_layout[2];
-            let cursor = if self.search_mode == SearchMode::Input { "█" } else { "" };
+            let cursor = if self.search_mode == SearchMode::Input {
+                "█"
+            } else {
+                ""
+            };
 
             // Match count on the right
             let match_info = if !self.match_order.is_empty() {
@@ -1940,13 +2025,18 @@ impl Component for MultiLogsComponent {
                 let match_para = Paragraph::new(Line::from(vec![
                     Span::styled(&match_info, Style::default().fg(Color::Yellow)),
                     Span::raw(" "),
-                ])).alignment(ratatui::layout::Alignment::Right);
+                ]))
+                .alignment(ratatui::layout::Alignment::Right);
                 frame.render_widget(match_para, search_area);
             }
         }
 
         // Footer
-        let footer_area = if has_search_bar { main_layout[3] } else { main_layout[2] };
+        let footer_area = if has_search_bar {
+            main_layout[3]
+        } else {
+            main_layout[2]
+        };
 
         let footer_spans = if self.search_mode == SearchMode::Input {
             vec![

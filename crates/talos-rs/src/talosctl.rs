@@ -161,13 +161,20 @@ pub fn get_discovery_members(node: &str) -> Result<Vec<DiscoveryMember>, TalosEr
 ///
 /// This version uses the context name to get the correct certificates and endpoint,
 /// and uses tokio async process to avoid blocking the runtime.
-pub async fn get_discovery_members_for_context(context: &str) -> Result<Vec<DiscoveryMember>, TalosError> {
+pub async fn get_discovery_members_for_context(
+    context: &str,
+) -> Result<Vec<DiscoveryMember>, TalosError> {
     let output = exec_talosctl_async(&[
-        "--context", context,
-        "--nodes", "127.0.0.1",
-        "get", "members",
-        "-o", "yaml"
-    ]).await?;
+        "--context",
+        context,
+        "--nodes",
+        "127.0.0.1",
+        "get",
+        "members",
+        "-o",
+        "yaml",
+    ])
+    .await?;
     parse_discovery_members_yaml(&output)
 }
 

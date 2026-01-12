@@ -5,22 +5,25 @@
 use crate::action::Action;
 use crate::components::Component;
 use crate::components::diagnostics::k8s::{
-    check_pdb_health, check_pod_health, create_k8s_client, PdbHealthInfo, PodHealthInfo,
+    PdbHealthInfo, PodHealthInfo, check_pdb_health, check_pod_health, create_k8s_client,
 };
 use crate::ui_ext::HealthIndicatorExt;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use kube::Client;
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Row, Table, TableState},
-    Frame,
 };
 use std::time::Duration;
 use talos_pilot_core::{AsyncState, HasHealth, HealthIndicator, SelectableList};
-use talos_rs::{get_discovery_members_for_context, DiscoveryMember, NodeTimeInfo, TalosClient, TalosConfig, VersionInfo};
+use talos_rs::{
+    DiscoveryMember, NodeTimeInfo, TalosClient, TalosConfig, VersionInfo,
+    get_discovery_members_for_context,
+};
 
 /// Auto-refresh interval in seconds
 const AUTO_REFRESH_INTERVAL_SECS: u64 = 30;
@@ -232,7 +235,8 @@ impl LifecycleComponent {
                 data.versions = versions;
             }
             Err(e) => {
-                self.state.set_error(format!("Failed to fetch versions: {}", e));
+                self.state
+                    .set_error(format!("Failed to fetch versions: {}", e));
                 // Re-store the data so far
                 self.state.set_data(data);
                 return Ok(());
@@ -274,11 +278,14 @@ impl LifecycleComponent {
 
         // Build node statuses combining version and time info
         // Fetch config hash for each node individually for drift detection
-        let statuses: Vec<NodeStatus> = data.versions
+        let statuses: Vec<NodeStatus> = data
+            .versions
             .iter()
             .map(|v| {
                 // Look up time sync status for this node
-                let time_synced = data.time_info.iter()
+                let time_synced = data
+                    .time_info
+                    .iter()
                     .find(|t| t.node == v.node)
                     .map(|t| t.synced);
 
@@ -294,7 +301,7 @@ impl LifecycleComponent {
                     version: v.version.clone(),
                     config_hash: node_config_hash,
                     time_synced,
-                    ready: true,       // Assume ready for now
+                    ready: true, // Assume ready for now
                     platform: v.platform.clone(),
                 }
             })
@@ -302,7 +309,8 @@ impl LifecycleComponent {
 
         // Update items, preserving selection if possible
         data.node_statuses.update_items(statuses);
-        self.table_state.select(Some(data.node_statuses.selected_index()));
+        self.table_state
+            .select(Some(data.node_statuses.selected_index()));
 
         // Fetch pre-operation health checks
         self.fetch_pre_op_checks_into(&mut data, &client).await;
@@ -337,9 +345,10 @@ impl LifecycleComponent {
                 let healthy = match client.etcd_status().await {
                     Ok(statuses) => {
                         // Count members with status
-                        members.iter().filter(|m| {
-                            statuses.iter().any(|s| s.member_id == m.id)
-                        }).count()
+                        members
+                            .iter()
+                            .filter(|m| statuses.iter().any(|s| s.member_id == m.id))
+                            .count()
                     }
                     Err(_) => total, // Assume all healthy if we can't get status
                 };
@@ -369,10 +378,7 @@ impl LifecycleComponent {
             let pod_result = check_pod_health(k8s).await;
             let pdb_result = check_pdb_health(k8s).await;
 
-            (
-                pod_result.ok(),
-                pdb_result.ok(),
-            )
+            (pod_result.ok(), pdb_result.ok())
         } else {
             (None, None)
         };
@@ -380,8 +386,14 @@ impl LifecycleComponent {
         // Determine if all checks passed
         let all_passed = {
             let pod_ok = pod_health.as_ref().map(|p| !p.has_issues()).unwrap_or(true);
-            let pdb_ok = pdb_health.as_ref().map(|p| !p.has_blocking_pdbs()).unwrap_or(true);
-            let etcd_ok = etcd_quorum.as_ref().map(|e| e.is_healthy && e.can_lose > 0).unwrap_or(true);
+            let pdb_ok = pdb_health
+                .as_ref()
+                .map(|p| !p.has_blocking_pdbs())
+                .unwrap_or(true);
+            let etcd_ok = etcd_quorum
+                .as_ref()
+                .map(|e| e.is_healthy && e.can_lose > 0)
+                .unwrap_or(true);
             pod_ok && pdb_ok && etcd_ok
         };
 
@@ -408,7 +420,10 @@ impl LifecycleComponent {
         }
 
         // Check for time sync issues
-        let unsynced_nodes: Vec<&str> = data.node_statuses.items().iter()
+        let unsynced_nodes: Vec<&str> = data
+            .node_statuses
+            .items()
+            .iter()
             .filter(|n| n.time_synced == Some(false))
             .map(|n| n.hostname.as_str())
             .collect();
@@ -420,19 +435,24 @@ impl LifecycleComponent {
         }
 
         // Check for config drift (compare hashes across nodes)
-        let config_hashes: Vec<(&str, Option<&str>)> = data.node_statuses.items().iter()
+        let config_hashes: Vec<(&str, Option<&str>)> = data
+            .node_statuses
+            .items()
+            .iter()
             .map(|n| (n.hostname.as_str(), n.config_hash.as_deref()))
             .collect();
 
-        let unique_hashes: std::collections::HashSet<_> = config_hashes.iter()
-            .filter_map(|(_, h)| *h)
-            .collect();
+        let unique_hashes: std::collections::HashSet<_> =
+            config_hashes.iter().filter_map(|(_, h)| *h).collect();
 
         if unique_hashes.len() > 1 {
             // Config drift detected - list nodes with different hashes
-            let drift_details: Vec<String> = config_hashes.iter()
+            let drift_details: Vec<String> = config_hashes
+                .iter()
                 .filter_map(|(hostname, hash)| {
-                    hash.map(|h| format!("{}:{}", hostname.split(':').next().unwrap_or(hostname), h))
+                    hash.map(|h| {
+                        format!("{}:{}", hostname.split(':').next().unwrap_or(hostname), h)
+                    })
                 })
                 .collect();
             data.alerts.push(Alert {
@@ -463,7 +483,10 @@ impl LifecycleComponent {
             } else {
                 data.alerts.push(Alert {
                     severity: AlertSeverity::Info,
-                    message: format!("Discovery: {}/{} nodes healthy", discovered_nodes, expected_nodes),
+                    message: format!(
+                        "Discovery: {}/{} nodes healthy",
+                        discovered_nodes, expected_nodes
+                    ),
                 });
             }
         }
@@ -533,16 +556,18 @@ impl LifecycleComponent {
         let k8s_range = self.k8s_support_range();
 
         // Get platform from first node
-        let platform = self.data()
+        let platform = self
+            .data()
             .and_then(|d| d.versions.first())
             .map(|v| v.platform.as_str())
             .unwrap_or("unknown");
 
         let lines = vec![
             Line::from(""),
-            Line::from(vec![
-                Span::styled("  Talos Version", Style::default().fg(Color::Yellow)),
-            ]),
+            Line::from(vec![Span::styled(
+                "  Talos Version",
+                Style::default().fg(Color::Yellow),
+            )]),
             Line::from(vec![
                 Span::raw("  "),
                 Span::styled("|-", Style::default().fg(Color::DarkGray)),
@@ -556,9 +581,10 @@ impl LifecycleComponent {
                 Span::styled(platform, Style::default().fg(Color::Cyan)),
             ]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled("  Kubernetes Support", Style::default().fg(Color::Yellow)),
-            ]),
+            Line::from(vec![Span::styled(
+                "  Kubernetes Support",
+                Style::default().fg(Color::Yellow),
+            )]),
             Line::from(vec![
                 Span::raw("  "),
                 Span::styled("|-", Style::default().fg(Color::DarkGray)),
@@ -581,18 +607,25 @@ impl LifecycleComponent {
         let header_cells = ["Node", "Version", "Config", "Time Sync", "Status"]
             .iter()
             .map(|h| {
-                ratatui::widgets::Cell::from(*h)
-                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                ratatui::widgets::Cell::from(*h).style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
             });
         let header = Row::new(header_cells).height(1);
 
-        let node_items: Vec<NodeStatus> = self.data()
+        let node_items: Vec<NodeStatus> = self
+            .data()
             .map(|d| d.node_statuses.items().to_vec())
             .unwrap_or_default();
 
         let rows = node_items.iter().map(|node| {
             let config_cell = match &node.config_hash {
-                Some(hash) => Span::styled(&hash[..8.min(hash.len())], Style::default().fg(Color::White)),
+                Some(hash) => Span::styled(
+                    &hash[..8.min(hash.len())],
+                    Style::default().fg(Color::White),
+                ),
                 None => Span::styled("-", Style::default().fg(Color::Gray)),
             };
 
@@ -647,9 +680,7 @@ impl LifecycleComponent {
 
     /// Draw the alerts section
     fn draw_alerts_section(&self, frame: &mut Frame, area: Rect) {
-        let alerts: Vec<Alert> = self.data()
-            .map(|d| d.alerts.clone())
-            .unwrap_or_default();
+        let alerts: Vec<Alert> = self.data().map(|d| d.alerts.clone()).unwrap_or_default();
 
         let lines: Vec<Line> = alerts
             .iter()
@@ -675,7 +706,8 @@ impl LifecycleComponent {
 
     /// Draw the pre-operation health checks section
     fn draw_pre_op_checks(&self, frame: &mut Frame, area: Rect) {
-        let pre_op_checks = self.data()
+        let pre_op_checks = self
+            .data()
             .map(|d| d.pre_op_checks.clone())
             .unwrap_or_default();
 
@@ -693,7 +725,11 @@ impl LifecycleComponent {
             Span::styled(overall_indicator, Style::default().fg(overall_color)),
             Span::raw(" "),
             Span::styled(
-                if pre_op_checks.all_passed { "All checks passed" } else { "Some checks have warnings" },
+                if pre_op_checks.all_passed {
+                    "All checks passed"
+                } else {
+                    "Some checks have warnings"
+                },
                 Style::default().fg(overall_color),
             ),
         ]));
@@ -734,7 +770,10 @@ impl LifecycleComponent {
                 ("✗", Color::Red)
             };
 
-            let running = pods.total_pods - pods.crashing.len() - pods.image_pull_errors.len() - pods.pending.len();
+            let running = pods.total_pods
+                - pods.crashing.len()
+                - pods.image_pull_errors.len()
+                - pods.pending.len();
             let summary = if has_issues || !pods.pending.is_empty() {
                 format!("{} running, {}", running, pods.summary())
             } else {
@@ -799,8 +838,7 @@ impl LifecycleComponent {
             Span::raw(" back"),
         ];
 
-        let footer = Paragraph::new(Line::from(spans))
-            .style(Style::default().fg(Color::DarkGray));
+        let footer = Paragraph::new(Line::from(spans)).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(footer, area);
     }
 }
@@ -835,7 +873,8 @@ impl Component for LifecycleComponent {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         // Check loading state (show loading only if no data yet)
-        let has_nodes = self.data()
+        let has_nodes = self
+            .data()
             .map(|d| !d.node_statuses.is_empty())
             .unwrap_or(false);
 
@@ -847,14 +886,15 @@ impl Component for LifecycleComponent {
         }
 
         if let Some(err) = self.state.error() {
-            let error = Paragraph::new(format!("Error: {}", err))
-                .style(Style::default().fg(Color::Red));
+            let error =
+                Paragraph::new(format!("Error: {}", err)).style(Style::default().fg(Color::Red));
             frame.render_widget(error, area);
             return Ok(());
         }
 
         // Get context name from data
-        let context_name = self.data()
+        let context_name = self
+            .data()
             .map(|d| d.context_name.clone())
             .unwrap_or_default();
 
@@ -870,8 +910,11 @@ impl Component for LifecycleComponent {
         .split(area);
 
         // Header
-        let header = Paragraph::new(format!(" Lifecycle │ {}", context_name))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        let header = Paragraph::new(format!(" Lifecycle │ {}", context_name)).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
         frame.render_widget(header, chunks[0]);
 
         // Versions section

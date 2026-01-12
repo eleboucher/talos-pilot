@@ -156,7 +156,11 @@ impl<T> AsyncState<T> {
     /// Set an error with context about retry count
     pub fn set_error_with_retry(&mut self, error: impl ToString) {
         self.retry_count += 1;
-        self.error = Some(format!("{} (retry {})", error.to_string(), self.retry_count));
+        self.error = Some(format!(
+            "{} (retry {})",
+            error.to_string(),
+            self.retry_count
+        ));
         self.loading = false;
     }
 

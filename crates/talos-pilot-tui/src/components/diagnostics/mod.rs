@@ -21,11 +21,11 @@ use crate::components::Component;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState},
-    Frame,
 };
 use std::time::{Duration, Instant};
 use talos_pilot_core::AsyncState;
@@ -315,10 +315,8 @@ impl DiagnosticsComponent {
         match &pending.fix.action {
             FixAction::AddKernelModule(name) => {
                 tracing::info!("Applying kernel module fix: {}", name);
-                let patch_yaml = format!(
-                    "machine:\n  kernel:\n    modules:\n      - name: {}",
-                    name
-                );
+                let patch_yaml =
+                    format!("machine:\n  kernel:\n    modules:\n      - name: {}", name);
 
                 let patch_file = "/tmp/talos-pilot-patch.yaml";
                 if let Err(e) = std::fs::write(patch_file, &patch_yaml) {
@@ -351,8 +349,7 @@ impl DiagnosticsComponent {
                         }
                         Err(e) => {
                             tracing::error!("Failed to run talosctl: {}", e);
-                            self.apply_result =
-                                Some(Err(format!("Failed to run talosctl: {}", e)));
+                            self.apply_result = Some(Err(format!("Failed to run talosctl: {}", e)));
                         }
                     }
 
@@ -434,7 +431,10 @@ impl DiagnosticsComponent {
         // Try to create K8s client once for all K8s-based checks
         // For worker nodes, use the control plane endpoint to fetch kubeconfig
         let kubeconfig_client = if let Some(ref cp_endpoint) = self.controlplane_endpoint {
-            tracing::info!("Worker node: using control plane {} for kubeconfig", cp_endpoint);
+            tracing::info!(
+                "Worker node: using control plane {} for kubeconfig",
+                cp_endpoint
+            );
             Some(client.with_node(cp_endpoint))
         } else {
             None
@@ -521,7 +521,10 @@ impl DiagnosticsComponent {
 
         // Get context and detected_addons for use in async block
         let context = self.data().map(|d| d.context.clone()).unwrap_or_default();
-        let detected_addons = self.data().map(|d| d.detected_addons.clone()).unwrap_or_default();
+        let detected_addons = self
+            .data()
+            .map(|d| d.detected_addons.clone())
+            .unwrap_or_default();
 
         let result = tokio::time::timeout(timeout, async {
             // Run core checks
@@ -537,13 +540,16 @@ impl DiagnosticsComponent {
             let cni_checks = cni::run_cni_checks(&client, &context, k8s_client.as_ref()).await;
 
             // Run addon-specific checks
-            let addon_checks = addons::run_addon_checks(
-                k8s_client.as_ref(),
-                &detected_addons,
-                &context,
-            ).await;
+            let addon_checks =
+                addons::run_addon_checks(k8s_client.as_ref(), &detected_addons, &context).await;
 
-            (system_checks, kubernetes_checks, service_checks, cni_checks, addon_checks)
+            (
+                system_checks,
+                kubernetes_checks,
+                service_checks,
+                cni_checks,
+                addon_checks,
+            )
         })
         .await;
 
@@ -574,14 +580,17 @@ impl DiagnosticsComponent {
             0 => "System Health",
             1 => "Kubernetes Components",
             2 => {
-                let cni_type = self.data().map(|d| d.context.cni_type.clone()).unwrap_or(CniType::Unknown);
+                let cni_type = self
+                    .data()
+                    .map(|d| d.context.cni_type.clone())
+                    .unwrap_or(CniType::Unknown);
                 match cni_type {
                     CniType::Flannel => "CNI (Flannel)",
                     CniType::Cilium => "CNI (Cilium)",
                     CniType::Calico => "CNI (Calico)",
                     _ => "CNI",
                 }
-            },
+            }
             3 => "Services",
             4 => "Addons",
             _ => "Unknown",
@@ -610,8 +619,7 @@ impl DiagnosticsComponent {
         frame.render_widget(block, area);
 
         if checks.is_empty() {
-            let loading = Paragraph::new("Loading...")
-                .style(Style::default().fg(Color::DarkGray));
+            let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, inner);
             return;
         }
@@ -819,8 +827,13 @@ impl DiagnosticsComponent {
         let content_lines: Vec<&str> = self.details_content.lines().collect();
         let max_line_len = content_lines.iter().map(|l| l.len()).max().unwrap_or(40);
 
-        let dialog_width = (max_line_len as u16 + 6).min(80).max(50).min(area.width.saturating_sub(4));
-        let dialog_height = (content_lines.len() as u16 + 6).min(20).min(area.height.saturating_sub(4));
+        let dialog_width = (max_line_len as u16 + 6)
+            .min(80)
+            .max(50)
+            .min(area.width.saturating_sub(4));
+        let dialog_height = (content_lines.len() as u16 + 6)
+            .min(20)
+            .min(area.height.saturating_sub(4));
         let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
         let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
 
@@ -894,8 +907,7 @@ impl Component for DiagnosticsComponent {
                     if is_host_command {
                         if self.confirmation_selection == 0 {
                             if let Some(pending) = &self.pending_action {
-                                if let FixAction::HostCommand { command, .. } =
-                                    &pending.fix.action
+                                if let FixAction::HostCommand { command, .. } = &pending.fix.action
                                 {
                                     // Spawn a thread to copy to clipboard and keep it alive
                                     // This prevents the "clipboard dropped quickly" warning
@@ -904,7 +916,9 @@ impl Component for DiagnosticsComponent {
                                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                             let _ = clipboard.set_text(cmd);
                                             // Keep clipboard alive for a bit so clipboard managers can read
-                                            std::thread::sleep(std::time::Duration::from_millis(100));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                100,
+                                            ));
                                         }
                                     });
                                     self.copy_feedback_until = Some(Instant::now());
@@ -981,23 +995,27 @@ impl Component for DiagnosticsComponent {
         .split(area);
 
         // Get header info from data
-        let (hostname, address, cni_label) = self.data()
-            .map(|d| (d.hostname.clone(), d.address.clone(), d.context.cni_type.name()))
+        let (hostname, address, cni_label) = self
+            .data()
+            .map(|d| {
+                (
+                    d.hostname.clone(),
+                    d.address.clone(),
+                    d.context.cni_type.name(),
+                )
+            })
             .unwrap_or_else(|| (String::new(), String::new(), "Unknown"));
 
         // Header
-        let header_text = format!(
-            " Diagnostics: {} ({}) [{}] ",
-            hostname, address, cni_label
-        );
+        let header_text = format!(" Diagnostics: {} ({}) [{}] ", hostname, address, cni_label);
         let header = Paragraph::new(header_text)
             .style(Style::default().add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::BOTTOM));
         frame.render_widget(header, chunks[0]);
 
         if let Some(error) = self.state.error() {
-            let error_msg = Paragraph::new(format!("Error: {}", error))
-                .style(Style::default().fg(Color::Red));
+            let error_msg =
+                Paragraph::new(format!("Error: {}", error)).style(Style::default().fg(Color::Red));
             frame.render_widget(error_msg, chunks[1]);
         } else if let Some(data) = self.data() {
             // Dynamically size Addons section based on whether addons are detected
@@ -1008,11 +1026,11 @@ impl Component for DiagnosticsComponent {
             };
 
             let content_chunks = Layout::vertical([
-                Constraint::Length(7),  // System Health (Memory, CPU, 3 certs = 5 items + 2 border)
-                Constraint::Length(4),  // Kubernetes Components (etcd, pod_health = 2 items + 2 border)
-                Constraint::Length(5),  // CNI
-                Constraint::Fill(1),    // Services
-                addons_height,          // Addons (if any)
+                Constraint::Length(7), // System Health (Memory, CPU, 3 certs = 5 items + 2 border)
+                Constraint::Length(4), // Kubernetes Components (etcd, pod_health = 2 items + 2 border)
+                Constraint::Length(5), // CNI
+                Constraint::Fill(1),   // Services
+                addons_height,         // Addons (if any)
             ])
             .split(chunks[1]);
 

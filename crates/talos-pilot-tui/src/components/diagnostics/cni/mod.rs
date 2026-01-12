@@ -132,10 +132,7 @@ async fn run_generic_cni_checks(
 }
 
 /// Calico-specific checks
-async fn run_calico_checks(
-    _client: &TalosClient,
-    ctx: &DiagnosticContext,
-) -> Vec<DiagnosticCheck> {
+async fn run_calico_checks(_client: &TalosClient, ctx: &DiagnosticContext) -> Vec<DiagnosticCheck> {
     let mut checks = Vec::new();
 
     // Check Calico pod health if we have K8s API info
@@ -150,7 +147,11 @@ async fn run_calico_checks(
     checks.push(DiagnosticCheck::pass(
         "cni",
         "CNI (Calico)",
-        if ctx.cni_info.is_some() { "OK" } else { "Detected" },
+        if ctx.cni_info.is_some() {
+            "OK"
+        } else {
+            "Detected"
+        },
     ));
 
     checks
@@ -159,11 +160,8 @@ async fn run_calico_checks(
 /// Generic helper to check CNI pod health
 fn check_cni_pods(name: &str, cni_info: &CniInfo) -> DiagnosticCheck {
     if cni_info.pods.is_empty() {
-        return DiagnosticCheck::warn(
-            "cni_pods",
-            name,
-            "No pods found",
-        ).with_details("Could not find CNI pods in kube-system namespace.");
+        return DiagnosticCheck::warn("cni_pods", name, "No pods found")
+            .with_details("Could not find CNI pods in kube-system namespace.");
     }
 
     let healthy = cni_info.are_pods_healthy();
@@ -173,20 +171,19 @@ fn check_cni_pods(name: &str, cni_info: &CniInfo) -> DiagnosticCheck {
         DiagnosticCheck::pass("cni_pods", name, &summary)
     } else {
         // Find unhealthy pods
-        let unhealthy: Vec<_> = cni_info.pods.iter()
+        let unhealthy: Vec<_> = cni_info
+            .pods
+            .iter()
             .filter(|p| p.phase != "Running" || !p.ready)
             .collect();
 
-        let details = unhealthy.iter()
+        let details = unhealthy
+            .iter()
             .map(|p| format!("  {} - {} (ready: {})", p.name, p.phase, p.ready))
             .collect::<Vec<_>>()
             .join("\n");
 
-        DiagnosticCheck::fail(
-            "cni_pods",
-            name,
-            &summary,
-            None,
-        ).with_details(&format!("Unhealthy pods:\n{}", details))
+        DiagnosticCheck::fail("cni_pods", name, &summary, None)
+            .with_details(&format!("Unhealthy pods:\n{}", details))
     }
 }

@@ -3,19 +3,19 @@
 //! Provides a consolidated view of security-related cluster status.
 
 use crate::action::Action;
+use crate::components::Component;
 use crate::components::diagnostics::pki::{
     self, CertStatus, CertificateInfo, EncryptionProvider, EncryptionStatus, PkiStatus,
     VolumeEncryption,
 };
-use crate::components::Component;
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 use std::time::Duration;
 use talos_pilot_core::AsyncState;
@@ -184,7 +184,8 @@ impl SecurityComponent {
                         if let Ok(cert_info) = pki::parse_certificate("talosconfig", &pem_data) {
                             // Extract RBAC role from subject
                             // Subject format is like "O=os:admin" - extract just the role part
-                            let role = cert_info.subject
+                            let role = cert_info
+                                .subject
                                 .strip_prefix("O=")
                                 .or_else(|| cert_info.subject.strip_prefix("CN="))
                                 .unwrap_or(&cert_info.subject)
@@ -260,15 +261,18 @@ impl SecurityComponent {
         // Get the first node from talosconfig to query
         let node = match talos_rs::TalosConfig::load_default() {
             Ok(config) => {
-                config.current_context()
-                    .and_then(|ctx| {
-                        // Prefer nodes if set, otherwise use first endpoint
-                        if !ctx.nodes.is_empty() {
-                            ctx.nodes.first().map(|n| n.split(':').next().unwrap_or(n).to_string())
-                        } else {
-                            ctx.endpoints.first().map(|e| e.split(':').next().unwrap_or(e).to_string())
-                        }
-                    })
+                config.current_context().and_then(|ctx| {
+                    // Prefer nodes if set, otherwise use first endpoint
+                    if !ctx.nodes.is_empty() {
+                        ctx.nodes
+                            .first()
+                            .map(|n| n.split(':').next().unwrap_or(n).to_string())
+                    } else {
+                        ctx.endpoints
+                            .first()
+                            .map(|e| e.split(':').next().unwrap_or(e).to_string())
+                    }
+                })
             }
             Err(_) => None,
         };
@@ -632,8 +636,7 @@ impl Component for SecurityComponent {
 
         // Content - render items or error/loading state
         if self.state.is_loading() && !self.state.has_data() {
-            let loading = Paragraph::new("Loading...")
-                .style(Style::default().fg(Color::DarkGray));
+            let loading = Paragraph::new("Loading...").style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, chunks[1]);
         } else if let Some(error) = self.state.error() {
             if !self.state.has_data() {

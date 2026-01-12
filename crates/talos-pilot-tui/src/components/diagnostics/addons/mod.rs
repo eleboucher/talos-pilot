@@ -13,8 +13,8 @@ use super::types::{DiagnosticCheck, DiagnosticContext};
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{
-    api::{Api, ListParams},
     Client,
+    api::{Api, ListParams},
 };
 use talos_pilot_core::constants::{
     ARGOCD_CRDS, CERT_MANAGER_CRDS, EXTERNAL_SECRETS_CRDS, FLUX_CRDS, KYVERNO_CRDS,

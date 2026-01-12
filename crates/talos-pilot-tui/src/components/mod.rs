@@ -33,7 +33,7 @@ pub use workloads::WorkloadHealthComponent;
 use crate::action::Action;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, MouseEvent};
-use ratatui::{layout::Rect, Frame};
+use ratatui::{Frame, layout::Rect};
 
 /// Trait for UI components
 ///

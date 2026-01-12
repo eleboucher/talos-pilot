@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 use talos_pilot_core::AsyncState;
 use talos_rs::{ApplyConfigResult, ApplyMode, TalosClient};
 
+use crate::ui_ext::CheckStatusExt;
 pub use types::*;
 
 /// Default auto-refresh interval in seconds

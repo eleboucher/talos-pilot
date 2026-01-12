@@ -12,11 +12,8 @@ use ratatui::{
     Frame,
 };
 use std::collections::HashSet;
+use talos_pilot_core::constants::MAX_LOG_ENTRIES;
 use talos_pilot_core::AsyncState;
-
-/// Maximum entries to keep in memory (ring buffer)
-/// At ~500 bytes per entry average, 5000 entries ≈ 2.5MB
-const MAX_ENTRIES: usize = 5000;
 
 /// Maximum lines to process per tick during streaming
 /// Higher = more responsive but could block UI if too high
@@ -429,12 +426,12 @@ impl MultiLogsComponent {
         data.entries.sort_by_key(|e| e.timestamp_sort);
 
         // Enforce max entries (ring buffer) - this is the primary memory bound
-        if data.entries.len() > MAX_ENTRIES {
-            let excess = data.entries.len() - MAX_ENTRIES;
+        if data.entries.len() > MAX_LOG_ENTRIES {
+            let excess = data.entries.len() - MAX_LOG_ENTRIES;
             data.entries.drain(0..excess);
             // Shrink capacity periodically to release memory
-            if data.entries.capacity() > MAX_ENTRIES * 2 {
-                data.entries.shrink_to(MAX_ENTRIES + 1000);
+            if data.entries.capacity() > MAX_LOG_ENTRIES * 2 {
+                data.entries.shrink_to(MAX_LOG_ENTRIES + 1000);
             }
         }
 
@@ -524,8 +521,8 @@ impl MultiLogsComponent {
         new_entries.sort_by_key(|e| e.timestamp_sort);
 
         // Enforce max entries (ring buffer behavior)
-        if new_entries.len() > MAX_ENTRIES {
-            new_entries.drain(0..new_entries.len() - MAX_ENTRIES);
+        if new_entries.len() > MAX_LOG_ENTRIES {
+            new_entries.drain(0..new_entries.len() - MAX_LOG_ENTRIES);
         }
 
         // Update data

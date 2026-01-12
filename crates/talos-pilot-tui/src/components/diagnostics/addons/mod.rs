@@ -16,6 +16,9 @@ use kube::{
     api::{Api, ListParams},
     Client,
 };
+use talos_pilot_core::constants::{
+    ARGOCD_CRDS, CERT_MANAGER_CRDS, EXTERNAL_SECRETS_CRDS, FLUX_CRDS, KYVERNO_CRDS,
+};
 
 /// Detected addons in the cluster
 #[derive(Debug, Clone, Default)]
@@ -73,33 +76,6 @@ impl DetectedAddons {
         names
     }
 }
-
-/// CRD patterns for addon detection
-const CERT_MANAGER_CRDS: &[&str] = &[
-    "certificates.cert-manager.io",
-    "issuers.cert-manager.io",
-    "clusterissuers.cert-manager.io",
-];
-
-const EXTERNAL_SECRETS_CRDS: &[&str] = &[
-    "externalsecrets.external-secrets.io",
-    "secretstores.external-secrets.io",
-];
-
-const KYVERNO_CRDS: &[&str] = &[
-    "clusterpolicies.kyverno.io",
-    "policies.kyverno.io",
-];
-
-const ARGOCD_CRDS: &[&str] = &[
-    "applications.argoproj.io",
-    "appprojects.argoproj.io",
-];
-
-const FLUX_CRDS: &[&str] = &[
-    "kustomizations.kustomize.toolkit.fluxcd.io",
-    "gitrepositories.source.toolkit.fluxcd.io",
-];
 
 /// Detect which addons are installed by checking CRDs and pods
 pub async fn detect_addons(client: &Client) -> DetectedAddons {

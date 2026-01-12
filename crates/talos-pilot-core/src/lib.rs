@@ -17,8 +17,12 @@
 //! - [`async_state`] - Async component state management (loading, error, refresh)
 //! - [`errors`] - Error formatting utilities for user-friendly messages
 //! - [`network`] - Network analysis utilities (port mapping, connection classification)
+//! - [`diagnostics`] - Diagnostic types for health checks and CNI detection
+//! - [`constants`] - Shared constants (thresholds, CRD names, refresh intervals)
 
 pub mod async_state;
+pub mod constants;
+pub mod diagnostics;
 pub mod errors;
 pub mod formatting;
 pub mod indicators;
@@ -28,6 +32,7 @@ pub mod types;
 
 // Re-export commonly used items at crate root
 pub use async_state::*;
+pub use diagnostics::*;
 pub use errors::*;
 pub use formatting::*;
 pub use indicators::*;

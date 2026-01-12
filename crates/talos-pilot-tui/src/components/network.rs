@@ -15,6 +15,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::time::Instant;
+use talos_pilot_core::constants::MAX_CAPTURE_SIZE;
 use talos_pilot_core::{format_bytes, AsyncState};
 use talos_rs::{
     get_kubespan_peers, is_kubespan_enabled, ConnectionCounts, ConnectionInfo, ConnectionState,
@@ -28,9 +29,6 @@ fn port_to_service(port: u32) -> Option<&'static str> {
 
 /// Auto-refresh interval in seconds (faster than processes for responsive rates)
 const AUTO_REFRESH_INTERVAL_SECS: u64 = 2;
-
-/// Max capture size before auto-stop (40 MB)
-const MAX_CAPTURE_SIZE: usize = 40 * 1024 * 1024;
 
 /// Sort order for device list
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

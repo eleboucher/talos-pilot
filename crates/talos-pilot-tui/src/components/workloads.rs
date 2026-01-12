@@ -27,6 +27,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::time::Duration;
+use talos_pilot_core::constants::HIGH_RESTART_THRESHOLD;
 use talos_pilot_core::{AsyncState, HasHealth, HealthIndicator};
 
 /// Health state of a workload or pod
@@ -158,9 +159,6 @@ pub struct NamespaceSummary {
 
 /// Auto-refresh interval in seconds
 const AUTO_REFRESH_INTERVAL_SECS: u64 = 10;
-
-/// High restart threshold
-const HIGH_RESTART_THRESHOLD: i32 = 5;
 
 /// Data loaded asynchronously for the workloads component
 #[derive(Debug, Clone, Default)]

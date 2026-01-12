@@ -1,55 +1,12 @@
 //! Shared types for the diagnostics system
+//!
+//! Core types (CheckStatus, CniType, etc.) are imported from talos-pilot-core.
+//! This module contains UI-specific types for fixes and diagnostic context.
 
-use ratatui::style::Color;
-use talos_pilot_core::{HasHealth, HealthIndicator};
-
-/// Status of a diagnostic check
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CheckStatus {
-    /// Check passed
-    Pass,
-    /// Warning condition
-    Warn,
-    /// Check failed - action may be available
-    Fail,
-    /// Status unknown or still checking
-    Unknown,
-    /// Currently checking
-    Checking,
-}
-
-impl CheckStatus {
-    /// Get indicator character and color
-    pub fn indicator(&self) -> (&'static str, Color) {
-        let health = self.health();
-        (
-            if matches!(self, CheckStatus::Checking) {
-                "◌" // Special spinner for checking state
-            } else {
-                health.symbol()
-            },
-            match self {
-                CheckStatus::Pass => Color::Green,
-                CheckStatus::Warn => Color::Yellow,
-                CheckStatus::Fail => Color::Red,
-                CheckStatus::Unknown => Color::DarkGray,
-                CheckStatus::Checking => Color::Cyan,
-            },
-        )
-    }
-}
-
-impl HasHealth for CheckStatus {
-    fn health(&self) -> HealthIndicator {
-        match self {
-            CheckStatus::Pass => HealthIndicator::Healthy,
-            CheckStatus::Warn => HealthIndicator::Warning,
-            CheckStatus::Fail => HealthIndicator::Error,
-            CheckStatus::Unknown => HealthIndicator::Unknown,
-            CheckStatus::Checking => HealthIndicator::Pending,
-        }
-    }
-}
+// Re-export core types for use by diagnostics modules
+pub use talos_pilot_core::{
+    CheckCategory, CheckStatus, CniInfo, CniPodInfo, CniType, PodHealthInfo, UnhealthyPodInfo,
+};
 
 /// Action that can be taken to fix an issue
 #[derive(Debug, Clone)]
@@ -189,28 +146,6 @@ impl DiagnosticCheck {
     }
 }
 
-/// Category of diagnostic checks
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckCategory {
-    System,
-    Kubernetes,
-    Services,
-    Cni,
-    Addons,
-}
-
-impl CheckCategory {
-    pub fn title(&self) -> &'static str {
-        match self {
-            CheckCategory::System => "System Health",
-            CheckCategory::Kubernetes => "Kubernetes Components",
-            CheckCategory::Services => "Services",
-            CheckCategory::Cni => "CNI",
-            CheckCategory::Addons => "Addons",
-        }
-    }
-}
-
 /// Pending action waiting for confirmation
 #[derive(Debug, Clone)]
 pub struct PendingAction {
@@ -220,129 +155,6 @@ pub struct PendingAction {
     pub fix: DiagnosticFix,
     /// Preview YAML (for config patches)
     pub preview: Option<String>,
-}
-
-/// Detected CNI type
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum CniType {
-    #[default]
-    Unknown,
-    Flannel,
-    Cilium,
-    Calico,
-    None,
-}
-
-impl CniType {
-    pub fn name(&self) -> &'static str {
-        match self {
-            CniType::Unknown => "Unknown",
-            CniType::Flannel => "Flannel",
-            CniType::Cilium => "Cilium",
-            CniType::Calico => "Calico",
-            CniType::None => "None",
-        }
-    }
-}
-
-/// Information about a CNI pod
-#[derive(Debug, Clone)]
-pub struct CniPodInfo {
-    /// Pod name
-    pub name: String,
-    /// Node the pod is running on
-    pub node_name: Option<String>,
-    /// Pod phase (Running, Pending, etc.)
-    pub phase: String,
-    /// Whether pod is ready
-    pub ready: bool,
-    /// Number of restarts
-    pub restart_count: i32,
-}
-
-/// CNI information from K8s API
-#[derive(Debug, Clone, Default)]
-pub struct CniInfo {
-    /// Detected CNI type
-    pub cni_type: CniType,
-    /// CNI pods in kube-system
-    pub pods: Vec<CniPodInfo>,
-}
-
-impl CniInfo {
-    /// Check if all CNI pods are healthy
-    pub fn are_pods_healthy(&self) -> bool {
-        if self.pods.is_empty() {
-            return false;
-        }
-        self.pods.iter().all(|pod| pod.phase == "Running" && pod.ready)
-    }
-
-    /// Get summary of CNI pod health
-    pub fn pod_health_summary(&self) -> String {
-        if self.pods.is_empty() {
-            return "No CNI pods found".to_string();
-        }
-
-        let total = self.pods.len();
-        let healthy = self.pods.iter().filter(|p| p.phase == "Running" && p.ready).count();
-        let total_restarts: i32 = self.pods.iter().map(|p| p.restart_count).sum();
-
-        if healthy == total && total_restarts == 0 {
-            format!("{}/{} pods healthy", healthy, total)
-        } else if healthy == total {
-            format!("{}/{} pods healthy ({} restarts)", healthy, total, total_restarts)
-        } else {
-            format!("{}/{} pods healthy", healthy, total)
-        }
-    }
-}
-
-/// Information about an unhealthy pod (from K8s API)
-#[derive(Debug, Clone)]
-pub struct UnhealthyPodInfo {
-    /// Pod name
-    pub name: String,
-    /// Pod namespace
-    pub namespace: String,
-    /// Container state (e.g., "CrashLoopBackOff", "ImagePullBackOff")
-    pub state: String,
-    /// Number of restarts
-    pub restart_count: i32,
-}
-
-/// Pod health information from K8s API
-#[derive(Debug, Clone, Default)]
-pub struct PodHealthInfo {
-    /// Pods in CrashLoopBackOff
-    pub crashing: Vec<UnhealthyPodInfo>,
-    /// Pods in ImagePullBackOff
-    pub image_pull_errors: Vec<UnhealthyPodInfo>,
-    /// Total pod count
-    pub total_pods: usize,
-}
-
-impl PodHealthInfo {
-    /// Check if there are any unhealthy pods
-    pub fn has_issues(&self) -> bool {
-        !self.crashing.is_empty() || !self.image_pull_errors.is_empty()
-    }
-
-    /// Get summary message
-    pub fn summary(&self) -> String {
-        if self.crashing.is_empty() && self.image_pull_errors.is_empty() {
-            "All pods healthy".to_string()
-        } else {
-            let mut parts = Vec::new();
-            if !self.crashing.is_empty() {
-                parts.push(format!("{} crashing", self.crashing.len()));
-            }
-            if !self.image_pull_errors.is_empty() {
-                parts.push(format!("{} image errors", self.image_pull_errors.len()));
-            }
-            parts.join(", ")
-        }
-    }
 }
 
 /// Context passed to diagnostic providers

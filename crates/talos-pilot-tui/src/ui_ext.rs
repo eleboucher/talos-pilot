@@ -4,7 +4,7 @@
 //! between the UI-agnostic core library and the TUI presentation layer.
 
 use ratatui::style::Color;
-use talos_pilot_core::{ConnectionState, HealthIndicator, QuorumState, SafetyStatus};
+use talos_pilot_core::{CheckStatus, ConnectionState, HasHealth, HealthIndicator, QuorumState, SafetyStatus};
 
 /// Extension trait for HealthIndicator to provide ratatui colors
 pub trait HealthIndicatorExt {
@@ -95,6 +95,26 @@ impl ConnectionStateExt for ConnectionState {
 
     fn symbol_and_color(&self) -> (&'static str, Color) {
         (self.symbol(), self.color())
+    }
+}
+
+/// Extension trait for CheckStatus to provide ratatui colors
+pub trait CheckStatusExt {
+    /// Get indicator symbol and color for this check status
+    fn indicator(&self) -> (&'static str, Color);
+}
+
+impl CheckStatusExt for CheckStatus {
+    fn indicator(&self) -> (&'static str, Color) {
+        let health = self.health();
+        (
+            if matches!(self, CheckStatus::Checking) {
+                "◌" // Special spinner symbol for checking state
+            } else {
+                health.symbol()
+            },
+            health.color(),
+        )
     }
 }
 
